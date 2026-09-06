@@ -1,0 +1,32 @@
+{
+  "parameters": {
+    "mode": "radial",
+    "resolution": 0.1,
+    "rotationStep": 1,
+    "xStep": 5,
+    "yStep": 5,
+    "zFloor": 0,
+    "radiusOffset": 20,
+    "terrainTriangles": 75586,
+    "toolTriangles": 960
+  },
+  "result": {
+    "numStrips": 360,
+    "totalPoints": 54000,
+    "checksum": 312526634,
+    "sampleValues": [
+      "8.93",
+      "9.42",
+      "9.74",
+      "9.92",
+      "9.99",
+      "10.00",
+      "10.00",
+      "10.00",
+      "10.00",
+      "10.00",
+      "10.00",
+      "10.00"
+    ]
+  }
+}

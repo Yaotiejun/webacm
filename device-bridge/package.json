@@ -1,0 +1,22 @@
+{
+  "name": "device-bridge",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "dev:carvera:tcp": "CARVERA_BACKEND=tcp CARVERA_TCP=127.0.0.1:3001 tsx watch src/main.ts",
+    "dev:gridbot:tcp": "GRIDBOT_BACKEND=tcp GRIDBOT_TCP=127.0.0.1:3002 tsx watch src/main.ts",
+    "start": "node --enable-source-maps dist/main.js",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
