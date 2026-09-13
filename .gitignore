@@ -37,3 +37,13 @@ __screenshots__/
 
 test-results/
 playwright-report/
+
+# 超大素材/导出文件：GitHub 单文件硬上限 100 MB，提交会被拒绝推送。
+# texturizer 导出文件名带时间戳，用通配以便覆盖后续导出。
+texturizer-*.json
+The Buddha.stl
+底.stp
+80468.jpg
+80468.eps
+CamLeft_1.obj
+EN3PRO_dizuo.gcode
