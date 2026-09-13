@@ -3,12 +3,12 @@
     <div v-if="title" class="pane-title">{{ title }}</div>
     <div v-if="emptyHint" class="pane-body hint">{{ emptyHint }}</div>
     <div
-      v-if="$slots.toolbar || toolbarHint || (jobPathHint && !showPathHintInOverlay)"
+      v-if="showToolbar && ($slots.toolbar || toolbarHint || (jobPathHint && !showPathHintInOverlay))"
       class="gcode-preview-panel__toolbar pane-body"
     >
       <slot name="toolbar" />
       <span v-if="toolbarHint" class="hint">{{ toolbarHint }}</span>
-      <GcodePathLegend :kind="kind" />
+      <GcodePathLegend v-if="showPathLegend" :kind="kind" />
       <span v-if="jobPathHint && !showPathHintInOverlay" class="gcode-preview-panel__path-hint">{{
         jobPathHint
       }}</span>
@@ -17,7 +17,7 @@
       <canvas ref="viewportCanvasRef" class="gcode-preview-panel__canvas" />
       <div v-if="footnote" class="gcode-preview-panel__overlay">
         {{ footnote }}
-        <GcodePathLegend :kind="kind" />
+        <GcodePathLegend v-if="showPathLegend" :kind="kind" />
         <span v-if="jobPathHint && showPathHintInOverlay" class="gcode-preview-panel__path-hint">
           {{ jobPathHint }}
         </span>
@@ -42,10 +42,14 @@ export type GcodePreviewPanelLayout = 'default' | 'compact' | 'cam'
 const props = withDefaults(
   defineProps<{
     kind: WorkspaceGcodePreviewKind
-    jobGcode: string
-    toolPosition: GcodeThreeToolPosition
-    stemColor: number
+    jobGcode?: string
+    /** Optional — defaults to origin; machine workspaces pass live WCS. */
+    toolPosition?: GcodeThreeToolPosition
+    /** Optional — defaults to muted gray stem. */
+    stemColor?: number
     presetOverrides?: UseWorkspaceGcodePreviewOptions['presetOverrides']
+    /** 0..1 path reveal for animate scrubbing. */
+    pathProgress?: number
     title?: string
     footnote?: string
     toolbarHint?: string
@@ -53,21 +57,42 @@ const props = withDefaults(
     layout?: GcodePreviewPanelLayout
     /** When footnote is set, duplicate path hint under overlay (Carvera/GridBot). */
     showPathHintInOverlay?: boolean
+    /** Kiri Laser/canvas modes: no toolbar strip above the viewport. */
+    showToolbar?: boolean
+    /** G0/G1 color legend (hidden for Kiri-like Laser chrome). */
+    showPathLegend?: boolean
   }>(),
   {
     layout: 'default',
     showPathHintInOverlay: false,
+    showToolbar: true,
+    showPathLegend: true,
     jobGcode: '',
     toolPosition: () => ({ x: 0, y: 0, z: 0 }),
     stemColor: 0x909399,
+    pathProgress: 1,
   },
 )
 
-const { jobPathHint, viewportRootRef, viewportCanvasRef } = useWorkspaceGcodePreview(props.kind, {
-  jobGcode: toRef(props, 'jobGcode'),
-  toolPosition: toRef(props, 'toolPosition'),
-  stemColor: toRef(props, 'stemColor'),
-  presetOverrides: props.presetOverrides,
+const {
+  jobPathHint,
+  viewportRootRef,
+  viewportCanvasRef,
+  getOrCreateAnimateStockGroup,
+  clearAnimateStockGroup,
+  fitCameraToAnimateStock,
+} = useWorkspaceGcodePreview(props.kind, {
+    jobGcode: toRef(props, 'jobGcode'),
+    toolPosition: toRef(props, 'toolPosition'),
+    stemColor: toRef(props, 'stemColor'),
+    pathProgress: toRef(props, 'pathProgress'),
+    presetOverrides: props.presetOverrides,
+  })
+
+defineExpose({
+  getOrCreateAnimateStockGroup,
+  clearAnimateStockGroup,
+  fitCameraToAnimateStock,
 })
 </script>
 

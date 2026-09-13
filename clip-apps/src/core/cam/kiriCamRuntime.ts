@@ -2,14 +2,7 @@ import '@/core/cam/legacy/kiri/add/array.js'
 import '@/core/cam/legacy/kiri/add/class.js'
 import '@/core/cam/legacy/kiri/add/three.js'
 
-/** Resolve legacy CAM module URL for dynamic `import()` (Vite dev + Vitest + Node). */
-function legacyCamModuleHref(relativeToCamCore: string): string {
-  return new URL(relativeToCamCore, import.meta.url).href
-}
-
-// Kiri CAM 运行时占位骨架
-// 后续会从 F:\\3d\\chip\\grip\\grid-apps-master 中引入 Kiri CAM JS 到 legacy 目录，
-// 再在这里做 TS 封装，向外暴露统一的 CAM 接口。
+// Kiri CAM runtime — slice/export loaded via static Vite bundle (see kiriCamLegacyBootstrap).
 
 export interface KiriCamRuntime {
   init(): Promise<void>
@@ -24,7 +17,7 @@ let camInitPromise: Promise<void> | null = null
 let camSliceImpl: ((settings: any, widget: any, onupdate: Function, ondone: Function) => Promise<void>) | null = null
 let camExportImpl: ((print: any, online: (chunk: any) => void) => any) | null = null
 
-/** Set when dynamic `import()` of slice/export fails in `auto` mode (otherwise swallowed). */
+/** Set when bootstrap import of slice/export fails in `auto` mode (otherwise swallowed). */
 let lastLegacyCamImportError: Error | null = null
 
 export function getKiriCamImpls() {
@@ -60,26 +53,20 @@ export const kiriCamRuntime: KiriCamRuntime = {
         const shouldTryLegacyCam = legacyCamMode !== '0'
         if (shouldTryLegacyCam) {
           lastLegacyCamImportError = null
-          const camSliceUrl = legacyCamModuleHref('legacy/kiri/mode/cam/slice.js')
-          const camExportUrl = legacyCamModuleHref('legacy/kiri/mode/cam/export.js')
-
           try {
-            const [sliceMod, exportMod] = await Promise.all([
-              import(/* @vite-ignore */ camSliceUrl),
-              import(/* @vite-ignore */ camExportUrl),
-            ])
-
-            const sliceFn = (sliceMod as any).cam_slice ?? (sliceMod as any).default
-            const exportFn = (exportMod as any).cam_export ?? (exportMod as any).default
-
+            // Static import path so Vite emits slice/export into the production bundle.
+            const boot = await import('@/core/cam/kiriCamLegacyBootstrap')
+            const sliceFn = boot.cam_slice
+            const exportFn = boot.cam_export
             camSliceImpl = typeof sliceFn === 'function' ? sliceFn : null
             camExportImpl = typeof exportFn === 'function' ? exportFn : null
+            if (!camSliceImpl || !camExportImpl) {
+              throw new Error('kiriCamLegacyBootstrap missing cam_slice and/or cam_export')
+            }
             lastLegacyCamImportError = null
           } catch (e) {
             lastLegacyCamImportError = e as Error
-            // strict mode: treat missing/failed legacy CAM as runtime init failure
             if (legacyCamMode === '1') throw e
-            // auto mode: keep runtime alive and allow placeholder engine fallback
             camSliceImpl = null
             camExportImpl = null
           }

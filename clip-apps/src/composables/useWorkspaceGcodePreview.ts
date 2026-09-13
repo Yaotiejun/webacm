@@ -7,7 +7,14 @@ import {
 import { MAKERA_CARVERA_MACHINE_ENVELOPE } from '@/core/devices/carveraMachineEnvelope'
 import { CARVERA_OBJ_PUBLIC_URL } from '@/core/devices/carveraMachineModel'
 
-export type WorkspaceGcodePreviewKind = 'carvera' | 'gridbot' | 'cam' | 'fdm' | 'raster'
+export type WorkspaceGcodePreviewKind =
+  | 'carvera'
+  | 'gridbot'
+  | 'cam'
+  | 'fdm'
+  | 'raster'
+  | 'sla'
+  | 'texturizer'
 
 type ViewportPreset = Pick<
   UseGcodeThreeViewportOptions,
@@ -82,6 +89,30 @@ export const WORKSPACE_GCODE_VIEWPORT_PRESETS: Record<WorkspaceGcodePreviewKind,
     minOrbitDistance: 40,
     maxOrbitDistance: 1200,
   },
+  /** Typical resin bed ~120×68 — tighter camera/grid than CAM. */
+  sla: {
+    pathColor: 0x5dade2,
+    rapidPathColor: 0xa9cce3,
+    tipColor: 0xe74c3c,
+    cameraPosition: [90, 70, 90],
+    gridSize: 160,
+    gridDivisions: 32,
+    axesSize: 30,
+    minOrbitDistance: 20,
+    maxOrbitDistance: 600,
+  },
+  /** Mesh-only arrange (no G-code paths) — same platform as CAM/Raster. */
+  texturizer: {
+    pathColor: 0x4f8ad9,
+    rapidPathColor: 0x85b8e8,
+    tipColor: 0xfa8c16,
+    cameraPosition: [160, 120, 160],
+    gridSize: 400,
+    gridDivisions: 40,
+    axesSize: 60,
+    minOrbitDistance: 40,
+    maxOrbitDistance: 1200,
+  },
 }
 
 export interface UseWorkspaceGcodePreviewOptions {
@@ -90,6 +121,8 @@ export interface UseWorkspaceGcodePreviewOptions {
   stemColor: Ref<number>
   /** Override preset fields (e.g. CAM stem follows spindle state). */
   presetOverrides?: Partial<ViewportPreset>
+  /** 0..1 path reveal (CAM animate). */
+  pathProgress?: Ref<number>
 }
 
 /**
@@ -103,16 +136,26 @@ export function useWorkspaceGcodePreview(
   const viewportCanvasRef = ref<HTMLCanvasElement | null>(null)
   const preset = { ...WORKSPACE_GCODE_VIEWPORT_PRESETS[kind], ...opts.presetOverrides }
 
-  const { jobPathHint } = useGcodeThreeViewport({
+  const { jobPathHint, getOrCreateAnimateStockGroup, clearAnimateStockGroup, fitCameraToAnimateStock } =
+    useGcodeThreeViewport({
     rootRef: viewportRootRef,
     canvasRef: viewportCanvasRef,
     jobGcode: opts.jobGcode,
     toolPosition: opts.toolPosition,
     stemColor: opts.stemColor,
+    pathProgress: opts.pathProgress,
     ...preset,
+    hideToolMarker: kind === 'sla' || kind === 'raster',
     machineEnvelope: kind === 'carvera' ? MAKERA_CARVERA_MACHINE_ENVELOPE : undefined,
     machineModelUrl: kind === 'carvera' ? CARVERA_OBJ_PUBLIC_URL : undefined,
   })
 
-  return { jobPathHint, viewportRootRef, viewportCanvasRef }
+  return {
+    jobPathHint,
+    viewportRootRef,
+    viewportCanvasRef,
+    getOrCreateAnimateStockGroup,
+    clearAnimateStockGroup,
+    fitCameraToAnimateStock,
+  }
 }

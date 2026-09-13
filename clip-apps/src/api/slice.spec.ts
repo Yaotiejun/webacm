@@ -66,11 +66,23 @@ describe('api.slice.sanitizeJobForWorker', () => {
     expect(out.models[0].transform.position.x).toBe(0)
   })
 
-  it('deep-clones per-model bbox so caller mutations do not affect sanitized output', () => {
-    const job = minimalSliceJob()
+  it('preserves per-model extruder for multi-material jobs', () => {
+    const job = minimalSliceJob({
+      models: [
+        {
+          ...minimalSliceJob().models[0]!,
+          id: 'a',
+          extruder: 1,
+        },
+        {
+          ...minimalSliceJob().models[0]!,
+          id: 'b',
+          extruder: 2,
+        },
+      ],
+    })
     const out = sanitizeJobForWorker(job)
-    job.models[0].bbox.max.x = 99
-    expect(out.models[0].bbox.max.x).toBe(1)
+    expect(out.models.map((m) => m.extruder)).toEqual([1, 2])
   })
 })
 

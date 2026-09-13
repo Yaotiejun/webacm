@@ -1,0 +1,570 @@
+/* Kiri:Moto-inspired workspace chrome (grid.space/kiri layout parity). */
+:root {
+  --km-appname-blue: #5a9fd4;
+  --km-menubar-back: rgba(245, 245, 245, 1);
+  --km-menubar-fore: rgba(20, 20, 20, 1);
+  --km-menubar-vsep: rgba(0, 0, 0, 0.2);
+  --km-menu-hover: #ddd;
+  --km-menu-active: #cfd8e0;
+  --km-menu-hover-bg: rgba(0, 0, 0, 0.06);
+  --km-blue-1: rgb(96, 127, 164);
+  --km-blue-2: rgb(126, 153, 183);
+  --km-blue-3: rgb(190, 204, 219);
+  --km-blue-4: rgb(221, 228, 234);
+  --km-blue-5: rgb(240, 243, 245);
+  --km-panel-bg: var(--km-menubar-back);
+  --km-border: rgba(0, 0, 0, 0.18);
+  --km-header: var(--km-blue-3);
+  --km-main-color: rgba(126, 153, 183, 1);
+  --km-main-color-hover: rgb(96, 127, 164);
+}
+
+.km-app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: sans-serif;
+  font-size: 14px;
+  color: var(--km-menubar-fore);
+  background: #ffffff;
+  overflow: hidden;
+  text-transform: capitalize;
+}
+
+.km-menubar {
+  position: relative;
+  z-index: 50;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 36px;
+  background: var(--km-menubar-back);
+  color: var(--km-menubar-fore);
+  border-bottom: 1px solid var(--km-border);
+  user-select: none;
+}
+
+.km-app-name {
+  display: flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-family: 'Russo One', 'Arial Black', Impact, sans-serif;
+  font-size: 15px;
+  font-weight: normal;
+  color: var(--km-appname-blue);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.km-menubar-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 5px 2px;
+  background: var(--km-menubar-vsep);
+}
+
+.km-top-menu {
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.km-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 2px;
+}
+
+.km-menu > .km-menu-label {
+  padding: 8px 12px;
+  cursor: default;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.km-menu:hover > .km-menu-label,
+.km-menu.open > .km-menu-label {
+  border-color: var(--km-appname-blue);
+  background: var(--km-menu-hover-bg);
+}
+
+.km-menu-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  margin-top: 3px;
+  background: var(--km-menubar-back);
+  border: 1px solid var(--km-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  z-index: 90;
+  font-family: sans-serif;
+}
+
+.km-menu-dropdown-right {
+  left: auto;
+  right: 0;
+}
+
+.km-menu:hover .km-menu-dropdown,
+.km-menu.open .km-menu-dropdown {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.km-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  color: inherit;
+  text-decoration: none;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  text-transform: capitalize;
+}
+
+.km-menu-item:hover {
+  background: var(--km-blue-4);
+  border-color: transparent;
+}
+
+.km-menu-item.disabled {
+  color: #999;
+  pointer-events: none;
+}
+
+.km-menu-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--km-menubar-vsep);
+  border: 0;
+}
+
+.km-menubar-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.km-mode-badge {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--km-appname-blue);
+  font-weight: 600;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.km-main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.km-main.is-workspace {
+  padding: 0;
+  background: transparent;
+  text-transform: none;
+}
+
+.km-main.is-page {
+  overflow: auto;
+  padding: 16px;
+  background: #f5f7fa;
+  text-transform: none;
+}
+
+/* Full-bleed FDM workspace */
+.km-workspace {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-transform: none;
+}
+
+.km-canvas-host {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #f0f0f0;
+}
+
+.km-canvas-host .viewport-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.km-mode-tools {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.km-mode-tools > button,
+.km-mode-export-wrap > button {
+  pointer-events: all;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: capitalize;
+  color: var(--km-menubar-fore);
+  background: var(--km-menubar-back);
+  border: 1px solid var(--km-border);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  padding: 4px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.km-mode-ico {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.km-mode-export-wrap {
+  position: relative;
+  pointer-events: all;
+  display: inline-flex;
+}
+
+.km-export-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  margin-top: 2px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--km-border);
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  pointer-events: all;
+  text-transform: none;
+}
+
+.km-export-menu > button {
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.km-export-menu > button:hover {
+  background: var(--km-blue-4);
+}
+
+.km-mode-tools > button:hover,
+.km-mode-export-wrap > button:hover {
+  border-color: var(--km-appname-blue);
+  background: var(--km-menu-hover);
+}
+
+.km-mode-tools > button.selected,
+.km-mode-export-wrap > button.selected {
+  border-color: var(--km-appname-blue);
+  background: var(--km-menu-active);
+  font-weight: 600;
+}
+
+.km-mode-tools > button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.km-mid {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: row;
+  pointer-events: none;
+}
+
+.km-panel-left,
+.km-panel-right {
+  pointer-events: all;
+  display: flex;
+  flex-direction: column;
+  width: 250px;
+  max-width: 32vw;
+  min-width: 200px;
+  overflow: hidden;
+  max-height: 100%;
+  background: transparent;
+}
+
+.km-panel-left {
+  padding: 0 5px 8px 4px;
+}
+
+.km-panel-right {
+  margin-left: auto;
+  padding: 0 4px 8px 5px;
+}
+
+.km-panel-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 52px);
+  scrollbar-width: thin;
+}
+
+.km-set-group {
+  background: var(--km-panel-bg);
+  border: 0;
+  border-radius: 0;
+  margin: 0 0 3px;
+  overflow: hidden;
+  padding: 0 0 2px;
+}
+
+.km-panel-left .km-set-group {
+  border-right: 1px solid var(--km-border);
+}
+
+.km-panel-right .km-set-group {
+  border-left: 1px solid var(--km-border);
+}
+
+.km-set-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  position: relative;
+  background: var(--km-header);
+  border-bottom: 0.5px solid var(--km-main-color-hover);
+  padding: 4px 22px 4px 8px;
+  font-weight: 600;
+  font-size: smaller;
+  cursor: pointer;
+  list-style: none;
+  text-transform: capitalize;
+  margin: 0 0 4px;
+}
+
+.km-set-header::-webkit-details-marker {
+  display: none;
+}
+
+.km-set-group > summary.km-set-header::after {
+  content: '▸';
+  position: absolute;
+  right: 5px;
+  font-size: 1em;
+  transform: rotate(-90deg);
+  transition: transform 0.2s ease;
+}
+
+.km-set-group[open] > summary.km-set-header::after {
+  transform: rotate(90deg);
+}
+
+.km-set-body {
+  padding: 0 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.km-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 1px 4px;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  background: var(--km-menubar-back);
+}
+
+.km-row:hover {
+  background: var(--km-blue-4);
+  border-right-color: var(--km-blue-1);
+}
+
+.km-row > label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.km-row > .km-ctrl {
+  width: 108px;
+  flex: 0 0 auto;
+}
+
+.km-row input[type='number'],
+.km-row select {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: right;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font: inherit;
+  background: #fff;
+  text-transform: none;
+}
+
+.km-row input[type='checkbox'] {
+  margin-left: auto;
+}
+
+.km-mid-center {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.km-layer-bar {
+  pointer-events: all;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(245, 245, 245, 0.92);
+  border: 1px solid var(--km-border);
+  border-radius: 4px;
+  text-transform: none;
+}
+
+.km-layer-anim-btn {
+  padding: 2px 10px;
+  border: 1px solid var(--km-border);
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.km-layer-anim-btn:hover {
+  background: rgba(126, 153, 183, 0.25);
+}
+
+.km-layer-anim-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.km-layer-anim-speed input[type='range'] {
+  width: 72px;
+}
+
+.km-object-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  text-transform: none;
+}
+
+.km-object-row:hover {
+  background: rgba(126, 153, 183, 0.25);
+}
+
+.km-object-row.active {
+  background: rgba(126, 153, 183, 0.4);
+}
+
+.km-object-row .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.km-hint {
+  color: #888;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.km-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.35);
+  pointer-events: all;
+}
+
+.km-progress-card {
+  background: #fff;
+  border: 1px solid var(--km-blue-2);
+  border-radius: 6px;
+  padding: 16px 22px;
+  min-width: 160px;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  text-transform: none;
+}
+
+.km-import-btn {
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 3px 7px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: #eee;
+  cursor: pointer;
+  font: inherit;
+  text-transform: capitalize;
+}
+
+.km-import-btn:hover {
+  background: var(--km-main-color);
+  color: #fff;
+}

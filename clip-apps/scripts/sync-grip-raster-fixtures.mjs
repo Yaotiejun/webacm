@@ -5,16 +5,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveGripPackagePath } from './resolve-grip-root.mjs'
 
 const clipRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const gripFixtures = path.resolve(clipRoot, '../../grip/raster-path-main/benchmark/fixtures')
+const gripRasterRoot = resolveGripPackagePath('raster-path-main')
+const gripFixtures = gripRasterRoot
+  ? path.join(gripRasterRoot, 'benchmark', 'fixtures')
+  : path.resolve(clipRoot, '../../grip/raster-path-main/benchmark/fixtures')
 const outDir = path.join(clipRoot, 'public', 'grip-raster-fixtures')
 
 const files = ['terrain.stl', 'tool.stl']
 
 if (!fs.existsSync(gripFixtures)) {
   console.error(`[sync-grip-raster-fixtures] grip fixtures not found: ${gripFixtures}`)
-  console.error('Clone grip raster-path-main or place terrain.stl / tool.stl manually under public/grip-raster-fixtures/')
+  console.error('Set GRIP_ROOT or use Kiri-Moto/raster-path-main; or place STLs under public/grip-raster-fixtures/')
   process.exit(1)
 }
 
@@ -30,7 +34,9 @@ for (const name of files) {
   const stat = fs.statSync(dest)
   console.log(`[sync-grip-raster-fixtures] ${name} → ${dest} (${stat.size} bytes)`)
 }
-const gripPlanarBaseline = path.resolve(clipRoot, '../../grip/raster-path-main/test-output/planar-baseline.json')
+const gripPlanarBaseline = gripRasterRoot
+  ? path.join(gripRasterRoot, 'test-output', 'planar-baseline.json')
+  : path.resolve(clipRoot, '../../grip/raster-path-main/test-output/planar-baseline.json')
 if (fs.existsSync(gripPlanarBaseline)) {
   const raw = JSON.parse(fs.readFileSync(gripPlanarBaseline, 'utf8'))
   const meta = {
@@ -51,7 +57,9 @@ if (fs.existsSync(gripPlanarBaseline)) {
   console.warn(`[sync-grip-raster-fixtures] skip meta (not found): ${gripPlanarBaseline}`)
 }
 
-const gripRadialBaseline = path.resolve(clipRoot, '../../grip/raster-path-main/test-output/radial-baseline.json')
+const gripRadialBaseline = gripRasterRoot
+  ? path.join(gripRasterRoot, 'test-output', 'radial-baseline.json')
+  : path.resolve(clipRoot, '../../grip/raster-path-main/test-output/radial-baseline.json')
 if (fs.existsSync(gripRadialBaseline)) {
   const raw = JSON.parse(fs.readFileSync(gripRadialBaseline, 'utf8'))
   const meta = {

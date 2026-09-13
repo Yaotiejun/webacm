@@ -143,6 +143,9 @@
             </span>
             <span v-else>—</span>
           </el-descriptions-item>
+          <el-descriptions-item v-if="store.lastResendFrom != null" label="Resend">
+            <span style="color: #e6a23c; font-weight: 600">from N{{ store.lastResendFrom }}</span>
+          </el-descriptions-item>
           <el-descriptions-item label="print.run">
             <el-tag :type="store.printRun ? 'success' : 'info'" size="small">
               {{ store.printRun ? '运行中' : '空闲' }}
@@ -222,6 +225,9 @@
           >
             发送当前 G-code（逐行）
           </el-button>
+          <el-checkbox v-model="useChecksum" :disabled="store.sending" style="margin-left: 4px">
+            Marlin checksum
+          </el-checkbox>
           <el-button
             size="small"
             plain
@@ -247,12 +253,49 @@
           >
             停止发送
           </el-button>
+          <el-button size="small" type="danger" :disabled="!connected" @click="onEstop">
+            急停
+          </el-button>
           <el-switch v-model="autoPoll" :disabled="!connected" active-text="自动" inactive-text="手动" />
           <JobSendProgress
             :sending="store.sending"
             :sent="store.sendSentLines"
             :total="store.sendTotalLines"
           />
+        </div>
+
+        <el-divider content-position="left">温度 / 进给</el-divider>
+        <div class="actions" style="flex-wrap: wrap; gap: 8px; align-items: center">
+          <span class="hint">喷嘴</span>
+          <el-input-number v-model="nozzleTargetC" :min="0" :max="300" :step="5" size="small" />
+          <el-button size="small" plain :disabled="!connected" @click="onSetNozzle">设定</el-button>
+          <span class="hint">热床</span>
+          <el-input-number v-model="bedTargetC" :min="0" :max="120" :step="5" size="small" />
+          <el-button size="small" plain :disabled="!connected" @click="onSetBed">设定</el-button>
+          <el-button size="small" type="primary" plain :disabled="!connected" @click="onPreheat">
+            预热
+          </el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onCooldown">冷却</el-button>
+          <span class="hint">进给%</span>
+          <el-input-number v-model="feedOverridePct" :min="10" :max="200" :step="5" size="small" />
+          <el-button size="small" plain :disabled="!connected" @click="onFeedOverride">M220</el-button>
+        </div>
+
+        <el-divider content-position="left">点动 (JOG)</el-divider>
+        <div class="actions" style="flex-wrap: wrap; gap: 6px; align-items: center">
+          <span class="hint">步距</span>
+          <el-input-number v-model="jogStep" :min="0.1" :max="50" :step="0.5" size="small" />
+          <span class="hint">进给</span>
+          <el-input-number v-model="jogFeed" :min="60" :max="6000" :step="100" size="small" />
+          <el-button size="small" plain :disabled="!connected" @click="onJog('Y', 1)">Y+</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('X', -1)">X-</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('X', 1)">X+</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('Y', -1)">Y-</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('Z', 1)">Z+</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('Z', -1)">Z-</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('E', 1)">E+</el-button>
+          <el-button size="small" plain :disabled="!connected" @click="onJog('E', -1)">E-</el-button>
+          <el-button size="small" type="primary" plain :disabled="!connected" @click="onHome">G28</el-button>
         </div>
 
         <el-divider />
@@ -284,7 +327,7 @@
             >
               {{ macro.label }}
             </el-button>
-            <span class="hint">需要已连接且 WebSocket OPEN。</span>
+            <span class="hint">Marlin / GridBot 宏；需已连接。</span>
           </div>
         </div>
 
@@ -363,7 +406,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useGridBotStore, type GridBotLogEntry } from '@/stores/useGridBotStore'
 import { useExportActions } from '@/composables/useExportActions'
 import { gcodeForClipboard } from '@/core/gcode/gcodeForClipboard'
-import { DEVICE_GCODE_MACROS } from '@/core/devices/deviceGcodeMacros'
+import { GRIDBOT_GCODE_MACROS } from '@/core/devices/deviceGcodeMacros'
 import { defaultDeviceBridgeEndpoint } from '@/core/devices/deviceEndpointReset'
 import { useFileImportActions } from '@/composables/useFileImportActions'
 import type { GridBotJobRecord } from '@/api/jobs'
@@ -447,7 +490,14 @@ const printElapsedPhaseHint = computed(() => {
 const { importTextFromInput } = useFileImportActions()
 void store.loadJobs()
 
-const deviceMacros = DEVICE_GCODE_MACROS
+const deviceMacros = GRIDBOT_GCODE_MACROS
+
+const useChecksum = ref(false)
+const nozzleTargetC = ref(200)
+const bedTargetC = ref(60)
+const feedOverridePct = ref(100)
+const jogStep = ref(1)
+const jogFeed = ref(1200)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const { connected, connecting, endpoint, logs, machine, bridge, jobs, selectedJobId } = storeToRefs(store)
@@ -656,14 +706,16 @@ function onSendCurrentJob() {
     return
   }
   const job = store.jobs.find((j) => j.id === store.selectedJobId)
-  void store.sendJobLines(currentJobContent.value, 20)
-  ElMessage.success(`开始发送作业：${job?.name ?? '未命名'}（逐行）`)
+  void store.sendJobLines(currentJobContent.value, 20, useChecksum.value)
+  ElMessage.success(
+    `开始发送作业：${job?.name ?? '未命名'}（逐行${useChecksum.value ? ' + checksum' : ''}）`,
+  )
 }
 
 function onPauseSend() {
   if (!store.sending || store.sendPaused) return
   store.pauseSend()
-  ElMessage.info('已暂停发送（当前行完成后生效）')
+  ElMessage.info('已暂停发送并抬升 Z')
 }
 
 function onResumeSend() {
@@ -675,7 +727,50 @@ function onResumeSend() {
 function onCancelSend() {
   if (!store.sending) return
   store.cancelSend()
-  ElMessage.info('已请求停止发送')
+  ElMessage.info('已请求停止并关断加热')
+}
+
+function onEstop() {
+  if (!connected.value) {
+    ElMessage.warning('尚未连接设备')
+    return
+  }
+  store.estop()
+  ElMessage.warning('已发送急停脚本')
+}
+
+function onSetNozzle() {
+  store.setNozzleTemp(nozzleTargetC.value)
+  ElMessage.success(`已设定喷嘴 ${nozzleTargetC.value}°C`)
+}
+
+function onSetBed() {
+  store.setBedTemp(bedTargetC.value)
+  ElMessage.success(`已设定热床 ${bedTargetC.value}°C`)
+}
+
+function onPreheat() {
+  store.preheat(nozzleTargetC.value, bedTargetC.value)
+  ElMessage.success('已发送预热')
+}
+
+function onCooldown() {
+  store.cooldown()
+  ElMessage.success('已发送冷却')
+}
+
+function onFeedOverride() {
+  store.setFeedOverridePct(feedOverridePct.value)
+  ElMessage.success(`已设定进给 ${feedOverridePct.value}%`)
+}
+
+function onJog(axis: 'X' | 'Y' | 'Z' | 'E', sign: 1 | -1) {
+  store.jogRelative(axis, sign * jogStep.value, jogFeed.value)
+}
+
+function onHome() {
+  store.homeAxes('XYZ')
+  ElMessage.success('已发送 G28')
 }
 
 function onResetBridgeEndpoint() {

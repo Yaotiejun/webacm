@@ -4,6 +4,8 @@ import { getKiriRuntimeState } from '@/core/slicer/kiriRuntimeState'
 
 export interface LegacyImportBindings {
   fdmSliceImpl: any
+  fdmPrepareImpl?: any
+  fdmExportImpl?: any
   fakeDeviceProfile: any
   fakeControllerProfile: any
 }
@@ -25,6 +27,16 @@ export function resolveLegacyFdmSliceImpl(mod: Record<string, unknown>): ((...ar
   return typeof fn === 'function' ? (fn as (...args: unknown[]) => unknown) : null
 }
 
+export function resolveLegacyFdmPrepareImpl(mod: Record<string, unknown>): ((...args: unknown[]) => unknown) | null {
+  const fn = mod.fdm_prepare ?? (mod.FDM as { prepare?: unknown } | undefined)?.prepare
+  return typeof fn === 'function' ? (fn as (...args: unknown[]) => unknown) : null
+}
+
+export function resolveLegacyFdmExportImpl(mod: Record<string, unknown>): ((...args: unknown[]) => unknown) | null {
+  const fn = mod.fdm_export ?? (mod.FDM as { export?: unknown } | undefined)?.export
+  return typeof fn === 'function' ? (fn as (...args: unknown[]) => unknown) : null
+}
+
 export async function loadLegacyFdmRuntime(
   mode: LegacyFdmMode,
   _baseUrl: string,
@@ -43,13 +55,17 @@ export async function loadLegacyFdmRuntime(
     if (impl) {
       options.onBind({
         fdmSliceImpl: impl,
+        fdmPrepareImpl: resolveLegacyFdmPrepareImpl(bundle),
+        fdmExportImpl: resolveLegacyFdmExportImpl(bundle),
         fakeDeviceProfile: {
-          bedWidth: 200,
-          bedDepth: 200,
-          maxHeight: 200,
-          originCenter: true,
+          bedWidth: 220,
+          bedDepth: 220,
+          maxHeight: 250,
+          originCenter: false,
           bedBelt: false,
           extruders: [{ extNozzle: 0.4, extFilament: 1.75 }],
+          gcodePre: ['G28', 'G90', 'M82'],
+          gcodePost: ['M104 S0', 'M140 S0', 'M84'],
         },
         fakeControllerProfile: {
           gcode: {},

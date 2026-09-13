@@ -73,6 +73,8 @@ export async function runRasterGripBridgeCore(
       rotationStep,
       quiet: true,
       debug: false,
+      // Lathe-adjacent: grip radial V3 (V4 true-lathe not in bundled worker yet).
+      ...(mode === 'radial' && cfg.radialV3 ? { radialV3: true } : {}),
     })
     await gripRaster.init()
 

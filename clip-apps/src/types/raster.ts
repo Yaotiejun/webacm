@@ -12,6 +12,11 @@ export interface RasterConfig {
   yStep: number
   zFloor: number
   tracingStep: number
+  /**
+   * When mode is radial: use grip radial V3 path generator (closer to lathe-style slices).
+   * V4 true-lathe remains out of product until grip worker implements it.
+   */
+  radialV3?: boolean
 }
 
 export interface RasterRequest {

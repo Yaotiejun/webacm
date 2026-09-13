@@ -1,463 +1,562 @@
 <template>
-  <el-container class="ws-root">
-    <!-- Left: model list -->
-    <el-aside width="280px" class="ws-aside">
-      <div class="pane-title">模型列表</div>
-      <div class="pane-body">
-        <el-upload
-          action="#"
-          :auto-upload="false"
-          multiple
-          :show-file-list="false"
-          accept=".stl,.obj,.3mf,.STL,.OBJ,.3MF"
-          @change="onFilesSelected"
-        >
-          <el-button type="primary" size="small">导入模型文件</el-button>
-          <span class="hint" style="margin-left: 6px">（仅保存在当前页面内存中）</span>
-        </el-upload>
+  <div class="km-workspace">
+    <div class="km-canvas-host">
+      <canvas ref="canvasRef" class="viewport-canvas"></canvas>
+    </div>
 
-        <el-divider />
+    <div class="km-mode-tools">
+      <button type="button" :class="{ selected: workspacePhase === 'arrange' }" @click="onArrangeClick">
+        <span class="km-mode-ico" aria-hidden="true">▣</span>
+        <span>arrange</span>
+      </button>
+      <button
+        type="button"
+        :class="{ selected: workspacePhase === 'slice' }"
+        :disabled="isSlicing"
+        @click="onSliceModeClick"
+      >
+        <span class="km-mode-ico" aria-hidden="true">☰</span>
+        <span>slice</span>
+      </button>
+      <button type="button" :class="{ selected: workspacePhase === 'preview' }" @click="onPreviewModeClick">
+        <span class="km-mode-ico" aria-hidden="true">⧉</span>
+        <span>preview</span>
+      </button>
+      <button
+        type="button"
+        :class="{ selected: workspacePhase === 'animate' }"
+        :disabled="!sliceResult"
+        :title="sliceResult ? 'Play layer stack (Kiri-like)' : 'Slice first'"
+        @click="onAnimateModeClick"
+      >
+        <span class="km-mode-ico" aria-hidden="true">▶</span>
+        <span>animate</span>
+      </button>
+      <div class="km-mode-export-wrap">
+        <button type="button" :class="{ selected: workspacePhase === 'export' }" @click="onExportModeClick">
+          <span class="km-mode-ico" aria-hidden="true">⇩</span>
+          <span>export</span>
+        </button>
+        <div class="km-export-menu" v-if="workspacePhase === 'export'">
+          <button type="button" @click="onExportGcodeClick">Download G-code</button>
+          <button type="button" @click="onSendToCarveraClick">{{ sendToCarveraLabel }}</button>
+          <button type="button" @click="onSendToGridBotClick">{{ sendToGridBotLabel }}</button>
+        </div>
+      </div>
+    </div>
 
-        <el-empty
-          v-if="models.length === 0"
-          :description="selectedJobId ? '当前 Job 无模型，或需重新导入模型' : '尚未导入模型'"
+    <div class="km-mid">
+      <div class="km-panel-left">
+        <FdmSettingsPanel
+          :device="current.device"
+          :process="current.process"
+          :material="current.material"
+          :proc="currentProcessDetail"
+          @update:proc="(proc) => (currentProcessDetail = proc)"
+          @changed="reload"
         />
+      </div>
 
-        <el-scrollbar v-else height="calc(100vh - 210px)">
+      <div class="km-mid-center">
+        <div
+          v-if="sliceResult && (workspacePhase === 'slice' || workspacePhase === 'preview' || workspacePhase === 'animate')"
+          class="km-layer-bar"
+        >
+          <span>Layer</span>
+          <input
+            type="range"
+            class="km-layer-range"
+            :min="0"
+            :max="Math.max(0, (sliceResult.preview.layers.length || 1) - 1)"
+            step="1"
+            v-model.number="activeLayerIndex"
+          />
+          <span v-if="sliceResult.preview.layers[activeLayerIndex]">
+            z={{ sliceResult.preview.layers[activeLayerIndex]?.z.toFixed(2) }}
+            <template v-if="workspacePhase === 'animate'">
+              / {{ activeLayerIndex + 1 }}/{{ sliceResult.preview.layers.length }}
+            </template>
+          </span>
+          <template v-if="workspacePhase === 'animate' || workspacePhase === 'preview'">
+            <label class="km-layer-anim-speed" title="Kiri STACKS.setFraction — reveal within top layer">
+              frac
+              <input
+                type="range"
+                min="0"
+                max="1000"
+                step="1"
+                :value="Math.round(animateLayerFraction * 1000)"
+                @input="onAnimateFractionInput"
+              />
+            </label>
+          </template>
+          <template v-if="workspacePhase === 'animate'">
+            <button type="button" class="km-layer-anim-btn" @click="toggleAnimatePlayback">
+              {{ animatePlaying ? 'Pause' : 'Play' }}
+            </button>
+            <label class="km-layer-anim-speed">
+              speed
+              <input type="range" min="1" max="20" step="1" v-model.number="animateSpeed" />
+            </label>
+          </template>
+        </div>
+      </div>
+
+      <div class="km-panel-right">
+        <div class="km-panel-scroll">
+          <details class="km-set-group" open>
+            <summary class="km-set-header">objects</summary>
+            <div class="km-set-body">
+              <input
+                ref="importFileInputRef"
+                type="file"
+                multiple
+                accept=".stl,.obj,.3mf,.STL,.OBJ,.3MF"
+                class="km-hidden-file"
+                @change="onImportFileInputChange"
+              />
+              <button type="button" class="km-import-btn" @click="importFileInputRef?.click()">Import</button>
+              <div class="km-paint-tools">
+                <button
+                  type="button"
+                  class="km-import-btn"
+                  :class="{ active: supportPaintMode === 'add' }"
+                  title="Paint manual supports (sliceSupportType=manual)"
+                  @click="toggleSupportPaintMode('add')"
+                >
+                  Paint support
+                </button>
+                <button
+                  type="button"
+                  class="km-import-btn"
+                  :class="{ active: supportPaintMode === 'erase' }"
+                  @click="toggleSupportPaintMode('erase')"
+                >
+                  Erase paint
+                </button>
+                <button type="button" class="km-import-btn" :disabled="!selectedModelId" @click="clearSelectedModelPaint">
+                  Clear paint
+                </button>
+                <label v-if="supportPaintMode" class="km-paint-radius" title="Brush radius (mm)">
+                  r
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="8"
+                    step="0.25"
+                    v-model.number="supportPaintRadius"
+                  />
+                  <span>{{ supportPaintRadius.toFixed(2) }}</span>
+                </label>
+              </div>
+              <p v-if="supportPaintMode" class="km-hint">
+                Drag on model surface to {{ supportPaintMode === 'add' ? 'paint' : 'erase' }} supports
+                (r={{ supportPaintRadius }}mm). Support mode → manual before slice.
+              </p>
+              <p v-if="models.length === 0" class="km-hint">
+                {{ selectedJobId ? 'No models for this job — re-import by filename.' : 'No models imported.' }}
+              </p>
+              <div
+                v-for="m in models"
+                :key="m.id"
+                class="km-object-row"
+                :class="{ active: m.id === selectedModelId || selectedModelIds.has(m.id) }"
+                @click="onObjectRowClick($event, m)"
+              >
+                <span class="name">{{ m.name }}</span>
+                <label class="km-obj-ext" @click.stop title="Extruder / tool index (Kiri widget.anno.extruder)">
+                  E
+                  <select :value="m.extruder ?? 0" @change="onModelExtruderChange(m.id, $event)">
+                    <option v-for="ei in extruderIndexOptions" :key="ei" :value="ei">{{ ei }}</option>
+                  </select>
+                </label>
+                <button type="button" class="km-obj-del" @click.stop="removeModel(m.id)">×</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showDiagnostics" class="km-diag-float">
+      <div class="km-diag-float-card">
+        <div class="km-diag-float-head">
+          <span>diagnostics</span>
+          <button type="button" class="km-diag-close" @click="showDiagnostics = false">×</button>
+        </div>
+        <div class="km-set-body km-diagnostics">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="Mode">FDM</el-descriptions-item>
+            <el-descriptions-item label="Device">{{ current.device }}</el-descriptions-item>
+            <el-descriptions-item label="Process">{{ current.process }}</el-descriptions-item>
+            <el-descriptions-item label="Material">{{ current.material }}</el-descriptions-item>
+            <el-descriptions-item v-if="sliceResult" label="Backend">
+              {{ sliceResult.backend || 'mock' }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="sliceResult?.inputMeta" label="Input mesh">
+              {{ sliceResult.inputMeta.triangleCount }} tri · {{ sliceResult.inputMeta.vertexCount }} vtx · Z
+              {{ sliceResult.inputMeta.zSpanMm.toFixed(2) }} mm
+            </el-descriptions-item>
+            <el-descriptions-item v-if="sliceResult?.legacyDebug" label="Legacy FDM">
+              <span>runtime {{ sliceResult.legacyDebug.ready ? 'ready' : 'not ready' }}</span>
+              <span style="margin-left: 8px"
+                >fdm_slice：{{ sliceResult.legacyDebug.hasSliceImpl ? 'loaded' : 'missing' }}</span
+              >
+              <el-button size="small" text style="margin-left: 8px" @click="copyLiveLegacyDebugSummary"
+                >Copy</el-button
+              >
+              <el-button size="small" text style="margin-left: 4px" @click="copyLegacyFdmComparisonBundle"
+                >Bundle</el-button
+              >
+              <div v-if="sliceResult.legacyDebug.initErrorMessage" class="km-hint" style="margin-top: 4px">
+                init：{{ sliceResult.legacyDebug.initErrorMessage }}
+              </div>
+              <div
+                v-if="sliceResult.legacyDebug.legacyImportErrorMessage"
+                class="km-hint"
+                style="margin-top: 4px"
+              >
+                import：{{ sliceResult.legacyDebug.legacyImportErrorMessage }}
+              </div>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="sliceResult?.fallback" label="Fallback">
+              {{ getSliceFallbackReasonLabel(sliceResult.fallback.reasonCode) }}
+              <span v-if="sliceResult.fallback.warningCode" class="km-hint">
+                [{{ sliceResult.fallback.warningCode }}]
+              </span>
+              - {{ sliceResult.fallback.message }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="selectedJobId" label="Job">
+              {{ jobs.find((j) => j.id === selectedJobId)?.name || '' }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="selectedJobSliceInputMeta" label="Job mesh">
+              {{ selectedJobSliceInputMeta.triangleCount }} tri · {{ selectedJobSliceInputMeta.vertexCount }} vtx ·
+              Z {{ selectedJobSliceInputMeta.zSpanMm.toFixed(2) }} mm
+            </el-descriptions-item>
+            <el-descriptions-item v-if="selectedJobSliceLegacyDebug" label="Job Legacy">
+              <span>runtime {{ selectedJobSliceLegacyDebug.ready ? 'ready' : 'not ready' }}</span>
+              <span style="margin-left: 8px">
+                fdm_slice：{{ selectedJobSliceLegacyDebug.hasSliceImpl ? 'loaded' : 'missing' }}
+              </span>
+              <el-button size="small" text style="margin-left: 8px" @click="copyJobLegacyDebugSummary"
+                >Copy</el-button
+              >
+              <div
+                v-if="selectedJobSliceLegacyDebug.initErrorMessage"
+                class="km-hint"
+                style="margin-top: 4px"
+              >
+                init：{{ selectedJobSliceLegacyDebug.initErrorMessage }}
+              </div>
+              <div
+                v-if="selectedJobSliceLegacyDebug.legacyImportErrorMessage"
+                class="km-hint"
+                style="margin-top: 4px"
+              >
+                import：{{ selectedJobSliceLegacyDebug.legacyImportErrorMessage }}
+              </div>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="selectedJobId" label="comparisonSourceFingerprint">
+              <span style="font-family: monospace; font-size: 11px; word-break: break-all">
+                {{ selectedJobLegacyComparisonSourceFingerprint }}
+              </span>
+              <el-button size="small" text style="margin-left: 8px" @click="copyLegacyFdmSourceFingerprint">
+                Copy
+              </el-button>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="selectedJobId" label="traceSchemaVersion">
+              <span style="font-family: monospace; font-size: 11px; word-break: break-all">
+                {{ TRACE_SCHEMA_VERSION }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="selectedJobId" label="comparisonSourceLabel">
+              <span style="font-family: monospace; font-size: 11px; word-break: break-all">
+                {{ selectedJobComparisonSourceLabel }}
+              </span>
+              <el-button size="small" text style="margin-left: 8px" @click="copyLegacyFdmSourceLabel">
+                Copy
+              </el-button>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div
+            v-if="selectedJobTelemetryDigest.length || selectedJobSliceInputMeta || selectedJobSliceLegacyDebug"
+            style="margin-top: 10px"
+          >
+            <el-collapse>
+              <el-collapse-item title="Job telemetry digest" name="job-telemetry-digest">
+                <div style="margin-bottom: 8px; display: flex; justify-content: flex-end">
+                  <el-button size="small" @click="copyJobTelemetryDigest">Copy</el-button>
+                </div>
+                <div
+                  v-for="event in selectedJobTelemetryDigest"
+                  :key="`${event.ts}-${event.code}-${event.reasonCode}`"
+                  style="font-size: 12px; margin-bottom: 8px"
+                >
+                  <div>
+                    [{{ new Date(event.ts).toLocaleTimeString() }}]
+                    <strong>{{ event.code }}</strong>
+                    / {{ getSliceFallbackReasonLabel(event.reasonCode) }}
+                  </div>
+                  <div class="km-hint">{{ event.message }}</div>
+                </div>
+                <div
+                  v-if="selectedJobSliceInputMeta && !selectedJobTelemetryDigest.length"
+                  class="km-hint"
+                  style="font-size: 12px"
+                >
+                  No digest; use Copy to export saved sliceInputMeta.
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+
+          <div v-if="selectedJobDiagnosticsSnapshot" style="margin-top: 10px">
+            <el-collapse>
+              <el-collapse-item title="Job diagnostics snapshot" name="job-diagnostics-snapshot">
+                <div style="margin-bottom: 8px; display: flex; justify-content: flex-end">
+                  <el-button size="small" @click="copyJobDiagnosticsSnapshot">Copy</el-button>
+                </div>
+                <pre class="job-diagnostics-pre">{{ selectedJobDiagnosticsSnapshot }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+
+          <div v-if="sliceResult?.summary?.estimateMeta" style="margin-top: 10px">
+            <el-collapse>
+              <el-collapse-item title="Estimate meta" name="estimate-meta">
+                <div style="margin-bottom: 8px; display: flex; justify-content: flex-end; gap: 8px">
+                  <el-button size="small" @click="copyEstimateMetaCompactSummary">Summary</el-button>
+                  <el-button size="small" @click="exportEstimateMetaJson">JSON</el-button>
+                  <el-button size="small" @click="copyEstimateMetaJson">Copy JSON</el-button>
+                </div>
+                <el-descriptions :column="1" border size="small">
+                  <el-descriptions-item label="perimeter">
+                    {{ sliceResult.summary.estimateMeta.lengths.perimeter.toFixed(2) }} mm
+                  </el-descriptions-item>
+                  <el-descriptions-item label="infill">
+                    {{ sliceResult.summary.estimateMeta.lengths.infill.toFixed(2) }} mm
+                  </el-descriptions-item>
+                  <el-descriptions-item label="support">
+                    {{ sliceResult.summary.estimateMeta.lengths.support.toFixed(2) }} mm
+                  </el-descriptions-item>
+                  <el-descriptions-item label="travel(in/inter)">
+                    {{ sliceResult.summary.estimateMeta.lengths.travelInLayer.toFixed(2) }} /
+                    {{ sliceResult.summary.estimateMeta.lengths.travelInterLayer.toFixed(2) }} mm
+                  </el-descriptions-item>
+                  <el-descriptions-item label="retract">
+                    count={{ sliceResult.summary.estimateMeta.retract.estimatedCount }}
+                    (trigger={{ sliceResult.summary.estimateMeta.retract.triggerDistance.toFixed(2) }}mm)
+                  </el-descriptions-item>
+                  <el-descriptions-item label="timeSec">
+                    print={{ sliceResult.summary.estimateMeta.timeSec.print.toFixed(2) }}, travel={{
+                      sliceResult.summary.estimateMeta.timeSec.travel.toFixed(2)
+                    }}, retract={{ sliceResult.summary.estimateMeta.timeSec.retract.toFixed(2) }}, floor={{
+                      sliceResult.summary.estimateMeta.timeSec.floor.toFixed(2)
+                    }}, final={{ sliceResult.summary.estimateMeta.timeSec.final.toFixed(2) }}
+                  </el-descriptions-item>
+                </el-descriptions>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+
+          <div v-if="sliceTelemetryTimeline.length" style="margin-top: 10px">
+            <el-collapse>
+              <el-collapse-item title="Slice telemetry" name="slice-telemetry">
+                <div style="margin-bottom: 8px; display: flex; justify-content: flex-end">
+                  <el-button size="small" @click="copyCurrentTimelineDiagnostics">Copy</el-button>
+                </div>
+                <div
+                  v-for="event in sliceTelemetryTimeline"
+                  :key="`${event.ts}-${event.code}-${event.reasonCode}`"
+                  style="font-size: 12px; margin-bottom: 8px"
+                >
+                  <div>
+                    [{{ new Date(event.ts).toLocaleTimeString() }}]
+                    <strong>{{ event.code }}</strong>
+                    / {{ event.reasonCode }}
+                  </div>
+                  <div class="km-hint">{{ event.message }}</div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+
+          <div class="km-diag-actions">
+            <el-button size="small" @click="go('/config/fdm')">Config</el-button>
+            <el-button size="small" @click="go('/devices/fdm')">Devices</el-button>
+            <el-button size="small" @click="go('/process/fdm')">Process</el-button>
+            <el-button size="small" @click="go('/material/fdm')">Material</el-button>
+            <el-button size="small" @click="go('/jobs/fdm')">Jobs</el-button>
+          </div>
+
+          <el-divider />
+
+          <div class="km-set-subheader">
+            Process snapshot
+            <span v-if="currentJob && processChangedFromJob" class="km-hint">(changed vs Job)</span>
+          </div>
+          <el-empty v-if="!currentProcessDetail" description="No process" :image-size="48" />
+          <el-descriptions v-else :column="1" border size="small">
+            <el-descriptions-item label="Layer height">
+              {{ currentProcessDetail.sliceHeight }} mm
+              <span class="km-hint" style="margin-left: 6px"
+                >first {{ currentProcessDetail.firstSliceHeight }} mm</span
+              >
+            </el-descriptions-item>
+            <el-descriptions-item label="Shell/Top/Bottom">
+              {{ currentProcessDetail.sliceShells }} / {{ currentProcessDetail.sliceTopLayers }} /
+              {{ currentProcessDetail.sliceBottomLayers }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Line width">
+              {{ currentProcessDetail.sliceLineWidth }} mm
+            </el-descriptions-item>
+            <el-descriptions-item label="Fill">
+              {{ currentProcessDetail.sliceFillType }}
+              <span class="km-hint" style="margin-left: 6px"
+                >density {{ currentProcessDetail.sliceFillSparse }}</span
+              >
+            </el-descriptions-item>
+            <el-descriptions-item label="Support">
+              {{ currentProcessDetail.sliceSupportEnable ? 'on' : 'off' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Retract">
+              {{ currentProcessDetail.outputRetractDist }} mm @ {{ currentProcessDetail.outputRetractSpeed }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Speeds">
+              print {{ currentProcessDetail.outputFeedrate }} / seek {{ currentProcessDetail.outputSeekrate }} /
+              first {{ currentProcessDetail.firstLayerRate }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-divider />
+
+          <div class="km-set-subheader">
+            Model info
+            <span v-if="selectedModelIds.size > 1" class="km-hint">({{ selectedModelIds.size }} selected)</span>
+          </div>
+          <el-empty v-if="!modelInfo" description="No selection" :image-size="48" />
+          <el-descriptions v-else :column="1" border size="small">
+            <el-descriptions-item label="File">{{ modelInfo.name }}</el-descriptions-item>
+            <el-descriptions-item label="Format">{{ modelInfo.ext.toUpperCase() }}</el-descriptions-item>
+            <el-descriptions-item label="Size">
+              {{ modelInfo.size.x }} × {{ modelInfo.size.y }} × {{ modelInfo.size.z }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Min">
+              ({{ modelInfo.min.x }}, {{ modelInfo.min.y }}, {{ modelInfo.min.z }})
+            </el-descriptions-item>
+            <el-descriptions-item label="Max">
+              ({{ modelInfo.max.x }}, {{ modelInfo.max.y }}, {{ modelInfo.max.z }})
+            </el-descriptions-item>
+            <el-descriptions-item label="Volume">{{ modelInfo.volume }}</el-descriptions-item>
+          </el-descriptions>
+
+          <el-divider />
+
+          <el-button size="small" @click="reload" plain>Reload config</el-button>
+
+          <el-divider />
+
+          <div class="km-set-subheader">Slice backend</div>
+          <el-radio-group v-model="sliceBackendKind" size="small">
+            <el-radio-button value="mock">Mock</el-radio-button>
+            <el-radio-button value="kiri">Kiri</el-radio-button>
+          </el-radio-group>
+          <div style="margin-top: 8px">
+            <el-checkbox v-model="includeTelemetryInGcode">
+              Include diagnostics in exported G-code
+            </el-checkbox>
+          </div>
+          <p class="km-hint" style="margin-top: 6px">{{ sliceRuntimeHint }}</p>
+          <el-button size="small" style="margin-top: 6px" @click="onKiriPocClick">Kiri PoC</el-button>
+
+          <el-divider />
+
+          <div class="km-set-subheader">FDM Jobs</div>
+          <div style="padding: 0 0 8px">
+            <el-button
+              v-if="selectedJobId"
+              type="primary"
+              size="small"
+              plain
+              @click="onUpdateJobClick"
+            >
+              Update current Job
+            </el-button>
+          </div>
+          <el-empty v-if="jobs.length === 0" description="No jobs" :image-size="48" />
           <el-table
-            :data="models"
+            v-else
+            :data="jobs"
             size="small"
             border
-            highlight-current-row
-            :row-class-name="({ row }: { row: { id: string } }) => (row.id === selectedModelId ? 'is-selected' : '')"
-            @row-click="onRowClick"
+            height="140"
+            @row-click="onJobRowClick"
+            :row-class-name="({ row }: { row: FdmJobRecord }) => (row.id === selectedJobId ? 'is-selected' : '')"
           >
-            <el-table-column prop="name" label="文件名" min-width="160">
+            <el-table-column prop="name" label="Name" min-width="120" />
+            <el-table-column prop="createdAt" label="Created" min-width="110">
               <template #default="scope">
-                <span>{{ scope.row.name }}</span>
-                <el-tag
-                  v-if="scope.row.id === selectedModelId"
-                  size="small"
-                  type="success"
-                  style="margin-left: 4px"
-                >
-                  当前
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="80">
-              <template #default="scope">
-                <el-button type="danger" size="small" text @click.stop="removeModel(scope.row.id)">
-                  删除
-                </el-button>
+                {{ new Date(scope.row.createdAt).toLocaleString() }}
               </template>
             </el-table-column>
           </el-table>
-        </el-scrollbar>
-      </div>
-    </el-aside>
 
-    <!-- Center: 3D viewport placeholder -->
-    <el-container class="ws-center">
-      <el-main class="ws-viewport">
-        <div class="pane-title">3D 视图</div>
-        <div class="pane-body viewport">
-          <canvas ref="canvasRef" class="viewport-canvas"></canvas>
-        </div>
+          <el-divider />
 
-        <GcodePreviewPanel
-          layout="compact"
-          kind="fdm"
-          :job-gcode="fdmViewportGcode"
-          :tool-position="fdmViewportTool"
-          :stem-color="fdmViewportStem"
-          title="切片刀路 3D 示意（合成 G-code）"
-          :empty-hint="!sliceResult ? '请先切片；下方为单层 2D 预览。' : undefined"
-          :toolbar-hint="sliceResult ? '由 sliceResult.preview 合成 G0/G1，与 Carvera/CAM 共用折线视口。' : '切片完成后在此显示合成刀路折线。'"
-        />
-
-        <div class="pane-body" v-if="sliceResult" style="padding-top: 8px">
-          <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
-            <span>层：</span>
-            <el-slider
-              v-model="activeLayerIndex"
-              :min="0"
-              :max="sliceResult.preview.layers.length - 1"
-              :step="1"
-              :show-tooltip="false"
-              style="flex:1"
-            />
-            <span v-if="sliceResult && sliceResult.preview.layers[activeLayerIndex]">
-              z={{ sliceResult!.preview.layers[activeLayerIndex]?.z.toFixed(2) }}
-            </span>
+          <div class="km-set-subheader">Transform</div>
+          <el-empty v-if="!activeTransform" description="Select a model" :image-size="48" />
+          <div v-else style="padding: 4px 0 0">
+            <el-form label-width="52px" size="small">
+              <el-form-item label="Pos">
+                <el-input-number
+                  v-model="activeTransform.position.x"
+                  :step="1"
+                  controls-position="right"
+                  @change="applyActiveTransform"
+                />
+                <el-input-number
+                  v-model="activeTransform.position.y"
+                  :step="1"
+                  controls-position="right"
+                  style="margin-left: 4px"
+                  @change="applyActiveTransform"
+                />
+                <el-input-number
+                  v-model="activeTransform.position.z"
+                  :step="1"
+                  controls-position="right"
+                  style="margin-left: 4px"
+                  @change="applyActiveTransform"
+                />
+              </el-form-item>
+              <el-form-item label="Scale">
+                <el-input-number
+                  v-model="activeTransform.scale.x"
+                  :step="0.1"
+                  :min="0.01"
+                  controls-position="right"
+                  @change="applyActiveTransform"
+                />
+              </el-form-item>
+              <el-form-item label="Rot Z">
+                <el-input-number
+                  v-model="activeTransform.rotation.z"
+                  :step="0.1"
+                  controls-position="right"
+                  @change="applyActiveTransform"
+                />
+              </el-form-item>
+            </el-form>
           </div>
-          <canvas ref="sliceCanvasRef" width="300" height="300" class="slice-preview-canvas"></canvas>
-        </div>
-        <div class="pane-body" v-else style="padding-top: 8px">
-          <el-empty description="尚未切片，暂无法预览" />
-        </div>
-      </el-main>
-
-      <el-footer class="ws-footer">
-        <el-button type="primary" :loading="isSlicing" @click="onSliceClick">切片</el-button>
-        <el-button @click="onPreviewClick">预览</el-button>
-        <el-button @click="onExportGcodeClick">导出 G-code</el-button>
-        <el-button type="success" plain @click="onSendToCarveraClick">{{ sendToCarveraLabel }}</el-button>
-        <el-button type="success" plain @click="onSendToGridBotClick">{{ sendToGridBotLabel }}</el-button>
-        <el-button type="info" size="small" @click="onKiriPocClick">Kiri PoC</el-button>
-        <span class="hint">（{{ sliceRuntimeHint }}）</span>
-      </el-footer>
-    </el-container>
-
-    <!-- Right: config summary -->
-    <el-aside class="ws-aside-right">
-      <div class="pane-title">当前配置</div>
-
-      <div class="pane-body">
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="模式">FDM</el-descriptions-item>
-          <el-descriptions-item label="设备">{{ current.device }}</el-descriptions-item>
-          <el-descriptions-item label="工艺">{{ current.process }}</el-descriptions-item>
-          <el-descriptions-item label="材料">{{ current.material }}</el-descriptions-item>
-          <el-descriptions-item v-if="sliceResult" label="切片后端">
-            {{ sliceResult.backend || 'mock' }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="sliceResult?.inputMeta" label="输入网格（迁移元数据）">
-            {{ sliceResult.inputMeta.triangleCount }} 三角 · {{ sliceResult.inputMeta.vertexCount }} 顶点 · Z 跨度
-            {{ sliceResult.inputMeta.zSpanMm.toFixed(2) }} mm
-          </el-descriptions-item>
-          <el-descriptions-item v-if="sliceResult?.legacyDebug" label="Legacy FDM 桥">
-            <span>运行时 {{ sliceResult.legacyDebug.ready ? '就绪' : '未就绪' }}</span>
-            <span style="margin-left: 8px">fdm_slice：{{ sliceResult.legacyDebug.hasSliceImpl ? '已加载' : '未加载' }}</span>
-            <el-button size="small" text style="margin-left: 8px" @click="copyLiveLegacyDebugSummary">复制</el-button>
-            <el-button size="small" text style="margin-left: 4px" @click="copyLegacyFdmComparisonBundle">复制对账包</el-button>
-            <div v-if="sliceResult.legacyDebug.initErrorMessage" class="hint" style="margin-top: 4px">
-              init：{{ sliceResult.legacyDebug.initErrorMessage }}
-            </div>
-            <div v-if="sliceResult.legacyDebug.legacyImportErrorMessage" class="hint" style="margin-top: 4px">
-              import：{{ sliceResult.legacyDebug.legacyImportErrorMessage }}
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="sliceResult?.fallback" label="回退原因">
-            {{ getSliceFallbackReasonLabel(sliceResult.fallback.reasonCode) }}
-            <span v-if="sliceResult.fallback.warningCode" class="hint">
-              [{{ sliceResult.fallback.warningCode }}]
-            </span>
-            - {{ sliceResult.fallback.message }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobId" label="当前 Job">
-            <span>
-              {{ jobs.find((j) => j.id === selectedJobId)?.name || '' }}
-              <span class="hint" style="margin-left: 4px">（模型需按文件名重新导入）</span>
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobSliceInputMeta" label="Job 保存的输入网格">
-            {{ selectedJobSliceInputMeta.triangleCount }} 三角 · {{ selectedJobSliceInputMeta.vertexCount }} 顶点 · Z
-            {{ selectedJobSliceInputMeta.zSpanMm.toFixed(2) }} mm
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobSliceLegacyDebug" label="Job 保存的 Legacy FDM 桥">
-            <span>运行时 {{ selectedJobSliceLegacyDebug.ready ? '就绪' : '未就绪' }}</span>
-            <span style="margin-left: 8px">
-              fdm_slice：{{ selectedJobSliceLegacyDebug.hasSliceImpl ? '已加载' : '未加载' }}
-            </span>
-            <el-button size="small" text style="margin-left: 8px" @click="copyJobLegacyDebugSummary">复制</el-button>
-            <div v-if="selectedJobSliceLegacyDebug.initErrorMessage" class="hint" style="margin-top: 4px">
-              init：{{ selectedJobSliceLegacyDebug.initErrorMessage }}
-            </div>
-            <div v-if="selectedJobSliceLegacyDebug.legacyImportErrorMessage" class="hint" style="margin-top: 4px">
-              import：{{ selectedJobSliceLegacyDebug.legacyImportErrorMessage }}
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobId" label="comparisonSourceFingerprint">
-            <span style="font-family: monospace; font-size: 11px; word-break: break-all">
-              {{ selectedJobLegacyComparisonSourceFingerprint }}
-            </span>
-            <el-button size="small" text style="margin-left: 8px" @click="copyLegacyFdmSourceFingerprint">
-              复制
-            </el-button>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobId" label="traceSchemaVersion">
-            <span style="font-family: monospace; font-size: 11px; word-break: break-all">
-              {{ TRACE_SCHEMA_VERSION }}
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobId" label="comparisonSourceLabel">
-            <span style="font-family: monospace; font-size: 11px; word-break: break-all">
-              {{ selectedJobComparisonSourceLabel }}
-            </span>
-            <el-button size="small" text style="margin-left: 8px" @click="copyLegacyFdmSourceLabel">
-              复制
-            </el-button>
-          </el-descriptions-item>
-        </el-descriptions>
-        <div v-if="selectedJobTelemetryDigest.length || selectedJobSliceInputMeta || selectedJobSliceLegacyDebug" style="margin-top: 10px">
-          <el-collapse>
-            <el-collapse-item title="当前 Job 诊断（告警摘要 / 输入网格 / Legacy桥）" name="job-telemetry-digest">
-              <div style="margin-bottom: 8px; display: flex; justify-content: flex-end;">
-                <el-button size="small" @click="copyJobTelemetryDigest">复制诊断文本</el-button>
-              </div>
-              <div
-                v-for="event in selectedJobTelemetryDigest"
-                :key="`${event.ts}-${event.code}-${event.reasonCode}`"
-                style="font-size:12px; margin-bottom: 8px;"
-              >
-                <div>
-                  [{{ new Date(event.ts).toLocaleTimeString() }}]
-                  <strong>{{ event.code }}</strong>
-                  / {{ getSliceFallbackReasonLabel(event.reasonCode) }}
-                </div>
-                <div class="hint" style="margin-left: 0">{{ event.message }}</div>
-              </div>
-              <div v-if="selectedJobSliceInputMeta && !selectedJobTelemetryDigest.length" class="hint" style="font-size: 12px">
-                无告警摘要；可使用「复制诊断文本」导出已保存的 sliceInputMeta。
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-        <div v-if="selectedJobDiagnosticsSnapshot" style="margin-top: 10px">
-          <el-collapse>
-            <el-collapse-item title="当前 Job 诊断快照（最近保存）" name="job-diagnostics-snapshot">
-              <div style="margin-bottom: 8px; display: flex; justify-content: flex-end;">
-                <el-button size="small" @click="copyJobDiagnosticsSnapshot">复制快照文本</el-button>
-              </div>
-              <pre class="job-diagnostics-pre">{{ selectedJobDiagnosticsSnapshot }}</pre>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-        <div v-if="sliceResult?.summary?.estimateMeta" style="margin-top: 10px">
-          <el-collapse>
-            <el-collapse-item title="切片估算明细（调试）" name="estimate-meta">
-              <div style="margin-bottom: 8px; display: flex; justify-content: flex-end; gap: 8px">
-                <el-button size="small" @click="copyEstimateMetaCompactSummary">复制简版摘要</el-button>
-                <el-button size="small" @click="exportEstimateMetaJson">导出 JSON</el-button>
-                <el-button size="small" @click="copyEstimateMetaJson">复制 JSON</el-button>
-              </div>
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="perimeter 长度">
-                  {{ sliceResult.summary.estimateMeta.lengths.perimeter.toFixed(2) }} mm
-                </el-descriptions-item>
-                <el-descriptions-item label="infill 长度">
-                  {{ sliceResult.summary.estimateMeta.lengths.infill.toFixed(2) }} mm
-                </el-descriptions-item>
-                <el-descriptions-item label="support 长度">
-                  {{ sliceResult.summary.estimateMeta.lengths.support.toFixed(2) }} mm
-                </el-descriptions-item>
-                <el-descriptions-item label="travel(层内/层间)">
-                  {{ sliceResult.summary.estimateMeta.lengths.travelInLayer.toFixed(2) }} /
-                  {{ sliceResult.summary.estimateMeta.lengths.travelInterLayer.toFixed(2) }} mm
-                </el-descriptions-item>
-                <el-descriptions-item label="回抽估算">
-                  count={{ sliceResult.summary.estimateMeta.retract.estimatedCount }}
-                  (trigger={{ sliceResult.summary.estimateMeta.retract.triggerDistance.toFixed(2) }}mm)
-                </el-descriptions-item>
-                <el-descriptions-item label="时间分解(sec)">
-                  print={{ sliceResult.summary.estimateMeta.timeSec.print.toFixed(2) }},
-                  travel={{ sliceResult.summary.estimateMeta.timeSec.travel.toFixed(2) }},
-                  retract={{ sliceResult.summary.estimateMeta.timeSec.retract.toFixed(2) }},
-                  floor={{ sliceResult.summary.estimateMeta.timeSec.floor.toFixed(2) }},
-                  final={{ sliceResult.summary.estimateMeta.timeSec.final.toFixed(2) }}
-                </el-descriptions-item>
-              </el-descriptions>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-
-        <div v-if="sliceTelemetryTimeline.length" style="margin-top: 10px">
-          <el-collapse>
-            <el-collapse-item title="切片告警时间线（调试）" name="slice-telemetry">
-              <div style="margin-bottom: 8px; display: flex; justify-content: flex-end;">
-                <el-button size="small" @click="copyCurrentTimelineDiagnostics">复制当前诊断</el-button>
-              </div>
-              <div
-                v-for="event in sliceTelemetryTimeline"
-                :key="`${event.ts}-${event.code}-${event.reasonCode}`"
-                style="font-size:12px; margin-bottom: 8px;"
-              >
-                <div>
-                  [{{ new Date(event.ts).toLocaleTimeString() }}]
-                  <strong>{{ event.code }}</strong>
-                  / {{ event.reasonCode }}
-                </div>
-                <div class="hint" style="margin-left: 0">{{ event.message }}</div>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-
-        <div class="actions">
-          <el-button @click="go('/config/fdm')">配置总览</el-button>
-          <el-button @click="go('/devices/fdm')">设备</el-button>
-          <el-button @click="go('/process/fdm')">工艺</el-button>
-          <el-button @click="go('/material/fdm')">材料</el-button>
-          <el-button @click="go('/jobs/fdm')">Jobs</el-button>
-        </div>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 8px 0; border: none">
-          当前工艺参数
-          <span v-if="currentJob && processChangedFromJob" class="hint">（当前工艺已修改，与 Job 保存时不同）</span>
-        </div>
-        <el-empty v-if="!currentProcessDetail" description="未找到当前工艺配置" />
-        <el-descriptions v-else :column="1" border size="small">
-          <el-descriptions-item label="层高">
-            {{ currentProcessDetail.sliceHeight }} mm
-            <span class="hint" style="margin-left: 6px">首层 {{ currentProcessDetail.firstSliceHeight }} mm</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="壳/顶/底">
-            {{ currentProcessDetail.sliceShells }} / {{ currentProcessDetail.sliceTopLayers }} / {{
-              currentProcessDetail.sliceBottomLayers
-            }}
-          </el-descriptions-item>
-          <el-descriptions-item label="线宽">
-            {{ currentProcessDetail.sliceLineWidth }} mm
-          </el-descriptions-item>
-          <el-descriptions-item label="填充">
-            {{ currentProcessDetail.sliceFillType }}
-            <span class="hint" style="margin-left: 6px">密度 {{ currentProcessDetail.sliceFillSparse }}</span>
-            <span class="hint" style="margin-left: 6px">重叠 {{ currentProcessDetail.sliceFillOverlap }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="支撑">
-            {{ currentProcessDetail.sliceSupportEnable ? '开启' : '关闭' }}
-            <span v-if="currentProcessDetail.sliceSupportEnable" class="hint" style="margin-left: 6px">
-              密度 {{ currentProcessDetail.sliceSupportDensity }}
-            </span>
-          </el-descriptions-item>
-          <el-descriptions-item label="回抽">
-            {{ currentProcessDetail.outputRetractDist }} mm @ {{ currentProcessDetail.outputRetractSpeed }}
-          </el-descriptions-item>
-          <el-descriptions-item label="速度">
-            打印 {{ currentProcessDetail.outputFeedrate }} / 空程 {{ currentProcessDetail.outputSeekrate }} / 首层
-            {{ currentProcessDetail.firstLayerRate }}
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 8px 0; border: none">
-          模型信息
-          <span v-if="selectedModelIds.size > 1" class="hint">（已选中 {{ selectedModelIds.size }} 个模型）</span>
-        </div>
-        <el-empty v-if="!modelInfo" description="未选择模型" />
-        <el-descriptions v-else :column="1" border size="small">
-          <el-descriptions-item label="文件">{{ modelInfo.name }}</el-descriptions-item>
-          <el-descriptions-item label="格式">{{ modelInfo.ext.toUpperCase() }}</el-descriptions-item>
-          <el-descriptions-item label="尺寸 (X,Y,Z)">
-            {{ modelInfo.size.x }} × {{ modelInfo.size.y }} × {{ modelInfo.size.z }}
-          </el-descriptions-item>
-          <el-descriptions-item label="包围盒最小">
-            ({{ modelInfo.min.x }}, {{ modelInfo.min.y }}, {{ modelInfo.min.z }})
-          </el-descriptions-item>
-          <el-descriptions-item label="包围盒最大">
-            ({{ modelInfo.max.x }}, {{ modelInfo.max.y }}, {{ modelInfo.max.z }})
-          </el-descriptions-item>
-          <el-descriptions-item label="体积(粗略)">
-            {{ modelInfo.volume }}
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-divider />
-
-        <el-button @click="reload" plain>刷新当前配置</el-button>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 8px 0; border: none">切片后端</div>
-        <el-radio-group v-model="sliceBackendKind" size="small">
-          <el-radio-button value="mock">Mock</el-radio-button>
-          <el-radio-button value="kiri">Kiri（实验）</el-radio-button>
-        </el-radio-group>
-        <div style="margin-top: 8px">
-          <el-checkbox v-model="includeTelemetryInGcode">
-            导出 G-code 时附带切片诊断（告警摘要、诊断快照、输入网格元数据）
-          </el-checkbox>
-        </div>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 8px 0; border: none">FDM Jobs（本地）</div>
-        <div class="pane-body" style="padding: 0 0 8px">
-          <el-button
-            v-if="selectedJobId"
-            type="primary"
-            size="small"
-            plain
-            @click="onUpdateJobClick"
-          >
-            更新当前 Job
-          </el-button>
-          <span v-if="selectedJobId" class="hint" style="margin-left: 8px">
-            将当前配置与切片摘要覆盖保存到该 Job。
-          </span>
-        </div>
-        <el-empty v-if="jobs.length === 0" description="尚未保存任何 Job" />
-        <el-table
-          v-else
-          :data="jobs"
-          size="small"
-          border
-          height="160"
-          @row-click="onJobRowClick"
-          :row-class-name="({ row }: { row: FdmJobRecord }) => (row.id === selectedJobId ? 'is-selected' : '')"
-        >
-          <el-table-column prop="name" label="名称" min-width="160" />
-          <el-table-column prop="createdAt" label="创建时间" min-width="140">
-            <template #default="scope">
-              {{ new Date(scope.row.createdAt).toLocaleString() }}
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 8px 0; border: none">模型变换</div>
-        <el-empty v-if="!activeTransform" description="请选择一个模型" />
-        <div v-else class="pane-body" style="padding: 8px 0 0">
-          <el-form label-width="60px" size="small">
-            <el-form-item label="位置">
-              <el-input-number
-                v-model="activeTransform.position.x"
-                :step="1"
-                controls-position="right"
-                @change="applyActiveTransform"
-              />
-              <el-input-number
-                v-model="activeTransform.position.y"
-                :step="1"
-                controls-position="right"
-                style="margin-left: 4px"
-                @change="applyActiveTransform"
-              />
-              <el-input-number
-                v-model="activeTransform.position.z"
-                :step="1"
-                controls-position="right"
-                style="margin-left: 4px"
-                @change="applyActiveTransform"
-              />
-            </el-form-item>
-            <el-form-item label="缩放">
-              <el-input-number
-                v-model="activeTransform.scale.x"
-                :step="0.1"
-                :min="0.01"
-                controls-position="right"
-                @change="applyActiveTransform"
-              />
-            </el-form-item>
-            <el-form-item label="旋转Z">
-              <el-input-number
-                v-model="activeTransform.rotation.z"
-                :step="0.1"
-                controls-position="right"
-                @change="applyActiveTransform"
-              />
-            </el-form-item>
-          </el-form>
         </div>
       </div>
-    </el-aside>
-  </el-container>
+    </div>
+
+    <div v-if="isSlicing" class="km-progress">
+      <div class="km-progress-card">Slicing…</div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -475,9 +574,21 @@ import { getFdmJob, saveFdmJob, deleteFdmJob, type FdmJobRecord, type GridBotJob
 import type { SceneModelPayload, SliceJobPayload } from '@/types/job'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js'
+import { loadPartMeshFromFile } from '@/core/mesh/loadPartMesh'
+import {
+  computeAabbInSpace,
+  exportMeshesVerticesInSpace,
+  seatObjectOnBedZ,
+} from '@/core/mesh/fdmMeshOrient'
+import { trimLayerPathsByFraction } from '@/core/fdm/fdmAnimateLayerFraction'
+import {
+  appendPaintIfSpaced,
+  clonePaintPoints,
+  erasePaintNear,
+  syncPaintOverlayGroup,
+} from '@/core/fdm/fdmSupportPaint'
+import { getStockFdmDevice, resolveStockFdmDeviceId } from '@/core/slicer/stock/fdm/stockFdmDevices'
 import { useCarveraStore } from '@/stores/useCarveraStore'
 import { useGridBotStore } from '@/stores/useGridBotStore'
 import { useFdmStore } from '@/stores/useFdmStore'
@@ -518,9 +629,8 @@ import {
   TRACE_SCHEMA_VERSION,
 } from '@/core/traceKeys'
 import { useExportActions } from '@/composables/useExportActions'
-import GcodePreviewPanel from '@/components/gcode/GcodePreviewPanel.vue'
-import { useGcodePathEndToolPosition } from '@/composables/useGcodePathEndToolPosition'
-import { buildFdmSlicePreviewSyntheticGcode } from '@/core/fdm/fdmSlicePreviewGcode'
+import FdmSettingsPanel from '@/components/fdm/FdmSettingsPanel.vue'
+import { FDM_WORKSPACE_EVENT } from '@/layouts/workspaceEvents'
 
 const router = useRouter()
 const route = useRoute()
@@ -536,7 +646,16 @@ const current = reactive({
 })
 
 const currentProcessDetail = ref<FdmProcess | null>(null)
-
+const workspacePhase = ref<'arrange' | 'slice' | 'preview' | 'animate' | 'export'>('arrange')
+const showDiagnostics = ref(false)
+const importFileInputRef = ref<HTMLInputElement | null>(null)
+const animatePlaying = ref(false)
+const animateSpeed = ref(8) // layers per second (approx)
+/** 0..1 within top layer — Kiri STACKS.setFraction */
+const animateLayerFraction = ref(1)
+let animateTimer: ReturnType<typeof setInterval> | null = null
+const supportPaintMode = ref<'add' | 'erase' | null>(null)
+const supportPaintRadius = ref(2.5)
 const currentJob = computed(() => fdmStore.currentJob)
 
 const processChangedFromJob = computed(() => {
@@ -564,10 +683,65 @@ interface ModelItem {
   name: string
   file: File | null
   needsFile?: boolean
+  /** Multi-extruder tool index (Kiri widget.anno.extruder). */
+  extruder?: number
+  /** Manual support paint (Kiri widget.anno.paint). */
+  paint?: Array<{ point: { x: number; y: number; z: number }; radius: number }>
 }
 
 const models = ref<ModelItem[]>([])
 const selectedModelId = ref<string | null>(null)
+
+const extruderIndexOptions = computed(() => {
+  const stock = getStockFdmDevice(resolveStockFdmDeviceId(current.device || ''))
+  const n = Math.max(1, stock?.extruders?.length ?? 1)
+  // Always offer at least 0..3 for dual/multi experiments even if stock is single.
+  const max = Math.max(n, 4) - 1
+  return Array.from({ length: max + 1 }, (_, i) => i)
+})
+
+function onModelExtruderChange(id: string, ev: Event) {
+  const el = ev.target as HTMLSelectElement
+  const v = Math.max(0, Math.floor(Number(el.value) || 0))
+  const m = models.value.find((x) => x.id === id)
+  if (m) m.extruder = v
+}
+
+function toggleSupportPaintMode(mode: 'add' | 'erase') {
+  supportPaintMode.value = supportPaintMode.value === mode ? null : mode
+  if (supportPaintMode.value && currentProcessDetail.value) {
+    currentProcessDetail.value = {
+      ...currentProcessDetail.value,
+      sliceSupportType: 'manual',
+      sliceSupportEnable: true,
+    }
+  }
+}
+
+function clearSelectedModelPaint() {
+  const id = selectedModelId.value
+  if (!id) return
+  const m = models.value.find((x) => x.id === id)
+  if (m) m.paint = []
+  refreshPaintOverlay()
+  ElMessage.success('Cleared support paint')
+}
+
+function applySupportPaintAt(modelId: string, local: { x: number; y: number; z: number }) {
+  const m = models.value.find((x) => x.id === modelId)
+  if (!m) return
+  const r = supportPaintRadius.value
+  if (supportPaintMode.value === 'erase') {
+    m.paint = erasePaintNear(clonePaintPoints(m.paint), local, r)
+    refreshPaintOverlay()
+    return
+  }
+  const list = clonePaintPoints(m.paint)
+  if (!appendPaintIfSpaced(list, local, r)) return
+  m.paint = list
+  selectedModelId.value = modelId
+  refreshPaintOverlay()
+}
 // 多选集合：列表/场景统一用它驱动高亮；selectedModelId 表示“当前（最后一次点击）”用于信息面板
 const selectedModelIds = ref<Set<string>>(new Set())
 
@@ -589,14 +763,21 @@ const transforms = reactive(new Map<string, Transform>())
 const activeTransform = ref<Transform | null>(null)
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
-const sliceCanvasRef = ref<HTMLCanvasElement | null>(null)
-const fdmViewportTool = ref({ x: 0, y: 0, z: 0 })
-const fdmViewportStem = ref(0x409eff)
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let controls: any = null
+let displayRoot: THREE.Group | null = null
 let meshGroup: THREE.Group | null = null
+let sliceOverlayGroup: THREE.Group | null = null
+let paintOverlayGroup: THREE.Group | null = null
+let paintDragging = false
+let paintDragModelId: string | null = null
+
+function refreshPaintOverlay() {
+  if (!paintOverlayGroup) return
+  syncPaintOverlayGroup(paintOverlayGroup, models.value)
+}
 let raf = 0
 
 const raycaster = new THREE.Raycaster()
@@ -611,14 +792,6 @@ const highlightColor = 0xffa940
 
 const isSlicing = computed(() => fdmStore.slicing)
 const sliceResult = computed(() => fdmStore.sliceResult)
-
-const fdmViewportGcode = computed(() => {
-  const r = sliceResult.value
-  if (!r) return ''
-  return buildFdmSlicePreviewSyntheticGcode(r)
-})
-
-useGcodePathEndToolPosition(fdmViewportGcode, fdmViewportTool)
 
 const sliceTelemetryTimeline = computed(() => fdmStore.sliceTelemetryTimeline)
 const sliceRuntimeHint = computed(() => {
@@ -713,29 +886,27 @@ const sliceBackendKind = computed({
 })
 
 function exportSceneVerticesWorld(): Float32Array {
-  const verts: number[] = []
-  const v = new THREE.Vector3()
+  if (!displayRoot) return new Float32Array()
+  return exportMeshesVerticesInSpace(objectByModelId.values(), displayRoot)
+}
 
-  for (const obj of objectByModelId.values()) {
-    obj.updateWorldMatrix(true, true)
-    obj.traverse((c) => {
-      const mesh = c as THREE.Mesh
-      if (!(mesh as any).isMesh) return
-
-      const geom = (mesh as any).geometry as THREE.BufferGeometry | undefined
-      const pos = geom?.attributes?.position as THREE.BufferAttribute | undefined
-      if (!pos) return
-
-      mesh.updateWorldMatrix(true, false)
-      for (let i = 0; i < pos.count; i++) {
-        v.fromBufferAttribute(pos, i)
-        v.applyMatrix4(mesh.matrixWorld)
-        verts.push(v.x, v.y, v.z)
-      }
+/** Per-model platform-space meshes for multi-widget / multi-extruder slice. */
+function exportSceneModelMeshes(): import('@/core/slicer/sliceModelMeshes').SliceModelMesh[] {
+  if (!displayRoot) return []
+  const out: import('@/core/slicer/sliceModelMeshes').SliceModelMesh[] = []
+  for (const m of models.value) {
+    const obj = objectByModelId.get(m.id)
+    if (!obj) continue
+    const vertices = exportMeshesVerticesInSpace([obj], displayRoot)
+    if (!vertices.length) continue
+    out.push({
+      modelId: m.id,
+      vertices,
+      extruder: Number.isFinite(m.extruder) ? Math.max(0, Math.floor(Number(m.extruder))) : 0,
+      paint: clonePaintPoints(m.paint),
     })
   }
-
-  return new Float32Array(verts)
+  return out
 }
 
 function initThree() {
@@ -743,7 +914,7 @@ function initThree() {
   if (!canvas) return
 
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0xffffff)
+  scene.background = new THREE.Color(0xf0f0f0)
 
   camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000)
   camera.position.set(180, 140, 180)
@@ -758,8 +929,16 @@ function initThree() {
   dir.position.set(200, 400, 200)
   scene.add(dir)
 
+  displayRoot = new THREE.Group()
+  displayRoot.rotation.x = -Math.PI / 2 // Kiri WORLD: Z-up geometry stands on Three Y-up bed
   meshGroup = new THREE.Group()
-  scene.add(meshGroup)
+  displayRoot.add(meshGroup)
+  sliceOverlayGroup = new THREE.Group()
+  displayRoot.add(sliceOverlayGroup)
+  paintOverlayGroup = new THREE.Group()
+  paintOverlayGroup.name = 'fdm-paint-overlay'
+  displayRoot.add(paintOverlayGroup)
+  scene.add(displayRoot)
 
   const grid = new THREE.GridHelper(300, 30, 0x999999, 0xdddddd)
   scene.add(grid)
@@ -812,8 +991,59 @@ function initThree() {
       return
     }
 
+    if (supportPaintMode.value && displayRoot) {
+      let target: THREE.Object3D | null = firstHit.object
+      while (target && !modelIdByObject.has(target) && target.parent) {
+        target = target.parent
+      }
+      const id = (target && modelIdByObject.get(target)) || selectedModelId.value
+      if (id) {
+        const local = displayRoot.worldToLocal(firstHit.point.clone())
+        applySupportPaintAt(id, { x: local.x, y: local.y, z: local.z })
+        paintDragging = true
+        paintDragModelId = id
+        if (controls) controls.enabled = false
+        try {
+          renderer.domElement.setPointerCapture(ev.pointerId)
+        } catch {
+          /* ignore */
+        }
+        return
+      }
+    }
+
     const obj = firstHit.object
     toggleSelection(obj, ev)
+  }
+
+  const paintAtClient = (clientX: number, clientY: number) => {
+    if (!paintDragging || !paintDragModelId || !renderer || !camera || !meshGroup || !displayRoot) return
+    const rect = renderer.domElement.getBoundingClientRect()
+    pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1
+    pointer.y = -(((clientY - rect.top) / rect.height) * 2 - 1)
+    raycaster.setFromCamera(pointer, camera)
+    const hits = raycaster.intersectObjects(meshGroup.children, true)
+    const hit = hits[0]
+    if (!hit) return
+    const local = displayRoot.worldToLocal(hit.point.clone())
+    applySupportPaintAt(paintDragModelId, { x: local.x, y: local.y, z: local.z })
+  }
+
+  const onPointerMove = (ev: PointerEvent) => {
+    if (!paintDragging) return
+    paintAtClient(ev.clientX, ev.clientY)
+  }
+
+  const onPointerUp = (ev: PointerEvent) => {
+    if (!paintDragging) return
+    paintDragging = false
+    paintDragModelId = null
+    if (controls) controls.enabled = true
+    try {
+      renderer?.domElement.releasePointerCapture(ev.pointerId)
+    } catch {
+      /* ignore */
+    }
   }
 
   const animate = () => {
@@ -826,6 +1056,9 @@ function initThree() {
   queueMicrotask(resize)
   window.addEventListener('resize', resize)
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
+  renderer.domElement.addEventListener('pointermove', onPointerMove)
+  renderer.domElement.addEventListener('pointerup', onPointerUp)
+  renderer.domElement.addEventListener('pointercancel', onPointerUp)
 
   animate()
 
@@ -833,6 +1066,9 @@ function initThree() {
   return () => {
     window.removeEventListener('resize', resize)
     renderer?.domElement.removeEventListener('pointerdown', onPointerDown)
+    renderer?.domElement.removeEventListener('pointermove', onPointerMove)
+    renderer?.domElement.removeEventListener('pointerup', onPointerUp)
+    renderer?.domElement.removeEventListener('pointercancel', onPointerUp)
     cancelAnimationFrame(raf)
     controls?.dispose()
     renderer?.dispose()
@@ -840,6 +1076,22 @@ function initThree() {
     renderer = null
     scene = null
     camera = null
+    if (sliceOverlayGroup) {
+      while (sliceOverlayGroup.children.length) {
+        const c = sliceOverlayGroup.children.pop()!
+        const line = c as THREE.Line
+        line.geometry?.dispose?.()
+        const mat = line.material as THREE.Material | THREE.Material[]
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+        else mat?.dispose?.()
+      }
+    }
+    if (paintOverlayGroup) {
+      syncPaintOverlayGroup(paintOverlayGroup, [])
+    }
+    paintOverlayGroup = null
+    sliceOverlayGroup = null
+    displayRoot = null
     meshGroup = null
   }
 }
@@ -1049,12 +1301,11 @@ function exportEstimateMetaJson() {
   exportJson(filename, payload, FDM_EXPORT_SUCCESS.estimateMetaJson)
 }
 
-async function onFilesSelected(file: UploadFile, fileList: UploadUserFile[]) {
+async function importRawFiles(files: File[]) {
   modelInfo.value = null
+  clearSliceOverlay()
 
-  // Element Plus 的 change 返回当前文件和整个 fileList，我们只关心原生 File 对象
-  for (const uf of fileList) {
-    const raw = uf.raw
+  for (const raw of files) {
     if (!raw) continue
 
     // 若是从 Job 恢复的占位模型，允许用新文件覆盖
@@ -1073,6 +1324,7 @@ async function onFilesSelected(file: UploadFile, fileList: UploadUserFile[]) {
       name: raw.name,
       file: raw,
       needsFile: false,
+      extruder: 0,
     })
 
     // 首次导入一个受支持格式的模型时，作为默认当前并加载
@@ -1083,6 +1335,27 @@ async function onFilesSelected(file: UploadFile, fileList: UploadUserFile[]) {
       await loadSelectedModel()
     }
   }
+}
+
+async function onFilesSelected(_file: UploadFile, fileList: UploadUserFile[]) {
+  const files = fileList.map((uf) => uf.raw).filter((f): f is File => !!f)
+  await importRawFiles(files)
+}
+
+function onImportFileInputChange(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const files = input.files ? Array.from(input.files) : []
+  input.value = ''
+  if (!files.length) return
+  void importRawFiles(files)
+}
+
+function onLayerRangeInput(ev: Event) {
+  activeLayerIndex.value = Number((ev.target as HTMLInputElement).value)
+}
+
+async function onObjectRowClick(ev: MouseEvent, row: { id: string }) {
+  await onRowClick(row, null, ev)
 }
 
 function removeModel(id: string) {
@@ -1315,6 +1588,7 @@ function clearMeshes() {
   fdmStore.setSliceResult(null)
   activeLayerIndex.value = 0
   modelInfo.value = null
+  clearSliceOverlay()
   if (!meshGroup) return
   while (meshGroup.children.length) {
     const obj = meshGroup.children.pop()!
@@ -1331,7 +1605,9 @@ function vec3ToFmt(v: THREE.Vector3): Vec3 {
 }
 
 function updateModelInfo(id: string, name: string, obj: THREE.Object3D) {
-  const box = new THREE.Box3().setFromObject(obj)
+  const box = displayRoot
+    ? computeAabbInSpace(obj, displayRoot)
+    : new THREE.Box3().setFromObject(obj)
   const size = new THREE.Vector3()
   box.getSize(size)
 
@@ -1377,66 +1653,32 @@ async function loadModelById(id: string) {
 
   let loadedObj: THREE.Object3D | null = null
   let maxDim = 200
+  const mat = new THREE.MeshStandardMaterial({ color: defaultColor, metalness: 0.1, roughness: 0.8 })
 
-  if (lower.endsWith('.stl')) {
+  if (lower.endsWith('.stl') || lower.endsWith('.obj')) {
     if (!item.file) {
       ElMessage.warning(FDM_ACTION_WARNING.modelNeedsReimportFromJob)
       return
     }
-    const buf = await item.file.arrayBuffer()
-    const loader = new STLLoader()
-    const geom = loader.parse(buf)
+    // Keep file/Kiri Z-up geometry; displayRoot rotates for Three Y-up view.
+    const part = await loadPartMeshFromFile(item.file)
+    const geom = new THREE.BufferGeometry()
+    geom.setAttribute('position', new THREE.BufferAttribute(part.vertices.slice(), 3))
     geom.computeVertexNormals()
-
-    const mat = new THREE.MeshStandardMaterial({ color: defaultColor, metalness: 0.1, roughness: 0.8 })
-    const mesh = new THREE.Mesh(geom, mat)
-
     geom.computeBoundingBox()
-    const box = geom.boundingBox!
-    const center = new THREE.Vector3()
-    box.getCenter(center)
-    mesh.position.sub(center)
-    mesh.position.y -= box.min.y - center.y
-
+    const bb = geom.boundingBox!
+    const mesh = new THREE.Mesh(geom, mat)
+    // Seat in geometry/platform space before parenting under rotated displayRoot
+    mesh.position.set(
+      -((bb.min.x + bb.max.x) * 0.5),
+      -((bb.min.y + bb.max.y) * 0.5),
+      -bb.min.z,
+    )
     meshGroup.add(mesh)
     loadedObj = mesh
 
     const size = new THREE.Vector3()
-    box.getSize(size)
-    maxDim = Math.max(size.x, size.y, size.z)
-  } else if (lower.endsWith('.obj')) {
-    if (!item.file) {
-      ElMessage.warning(FDM_ACTION_WARNING.modelNeedsReimportFromJob)
-      return
-    }
-    const text = await item.file.text()
-    const loader = new OBJLoader()
-    const obj = loader.parse(text)
-
-    const box = new THREE.Box3().setFromObject(obj)
-    const center = new THREE.Vector3()
-    box.getCenter(center)
-    obj.position.sub(center)
-    obj.position.y -= box.min.y - center.y
-
-    obj.traverse((c: any) => {
-      if ((c as any).isMesh) {
-        const m = c as any
-        if (!Array.isArray((m as any).material) && !(m as any).material) {
-          ;(m as any).material = new THREE.MeshStandardMaterial({
-            color: defaultColor,
-            metalness: 0.1,
-            roughness: 0.8,
-          })
-        }
-      }
-    })
-
-    meshGroup.add(obj)
-    loadedObj = obj
-
-    const size = new THREE.Vector3()
-    box.getSize(size)
+    bb.getSize(size)
     maxDim = Math.max(size.x, size.y, size.z)
   } else if (lower.endsWith('.3mf')) {
     if (!item.file) {
@@ -1446,19 +1688,22 @@ async function loadModelById(id: string) {
     const buf = await item.file.arrayBuffer()
     const loader = new ThreeMFLoader()
     const obj = loader.parse(buf)
-
+    obj.traverse((c: any) => {
+      if ((c as any).isMesh) {
+        const m = c as THREE.Mesh
+        if (!Array.isArray(m.material) && !m.material) {
+          m.material = mat.clone()
+        }
+      }
+    })
+    // Seat while still unparented (identity); then add under displayRoot
     const box = new THREE.Box3().setFromObject(obj)
-    const center = new THREE.Vector3()
-    box.getCenter(center)
-    obj.position.sub(center)
-    obj.position.y -= box.min.y - center.y
-
-    meshGroup.add(obj)
-    loadedObj = obj
-
     const size = new THREE.Vector3()
     box.getSize(size)
     maxDim = Math.max(size.x, size.y, size.z)
+    seatObjectOnBedZ(obj)
+    meshGroup.add(obj)
+    loadedObj = obj
   } else {
     modelInfo.value = null
     return
@@ -1477,7 +1722,7 @@ async function loadModelById(id: string) {
 
     const dist = maxDim * 1.2 + 100
     camera.position.set(dist, dist * 0.8, dist)
-    controls?.target.set(0, 0, 0)
+    controls?.target.set(0, maxDim * 0.35, 0)
     controls?.update()
 
     updateModelInfo(item.id, item.name, loadedObj)
@@ -1489,6 +1734,7 @@ async function reloadJobs() {
 }
 
 onMounted(async () => {
+  window.addEventListener(FDM_WORKSPACE_EVENT, onFdmWorkspaceEvent as EventListener)
   await reload()
   await reloadJobs()
   initSlicerDebugSession(window, sessionStorage, {
@@ -1529,6 +1775,7 @@ onMounted(async () => {
         name: m.name,
         file: null,
         needsFile: true,
+        extruder: Number.isFinite(m.extruder) ? Math.max(0, Math.floor(Number(m.extruder))) : 0,
       }))
       selectedModelId.value = null
       objectByModelId.clear()
@@ -1540,86 +1787,195 @@ onMounted(async () => {
   }
 })
 
-function drawSlicePreview() {
-  const canvas = sliceCanvasRef.value
+function clearSliceOverlay() {
+  if (!sliceOverlayGroup) return
+  while (sliceOverlayGroup.children.length) {
+    const c = sliceOverlayGroup.children.pop()!
+    const line = c as THREE.Line
+    line.geometry?.dispose?.()
+    const mat = line.material as THREE.Material | THREE.Material[]
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+    else mat?.dispose?.()
+  }
+}
+
+function pathColor(type: string): number {
+  switch (type) {
+    case 'perimeter':
+      return 0x111111
+    case 'infill':
+      return 0x409eff
+    case 'support':
+      return 0xe6a23c
+    case 'travel':
+      return 0x909399
+    default:
+      return 0x333333
+  }
+}
+
+function updateSliceOverlay() {
+  clearSliceOverlay()
+  if (!sliceOverlayGroup || !displayRoot) return
   const result = sliceResult.value
-  if (!canvas || !result) return
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-
-  const { preview } = result
-  const layer = preview.layers[activeLayerIndex.value]
-  if (!layer) return
-
-  const { minX, minY, maxX, maxY } = preview.bounds
-  const width = canvas.width
-  const height = canvas.height
-
-  ctx.clearRect(0, 0, width, height)
-  ctx.save()
-
-  const scaleX = width / (maxX - minX || 1)
-  const scaleY = height / (maxY - minY || 1)
-  const scale = Math.min(scaleX, scaleY)
-
-  const mapPoint = (x: number, y: number): [number, number] => {
-    const nx = (x - minX) * scale
-    const ny = (y - minY) * scale
-    return [nx, height - ny]
+  if (!result) return
+  if (
+    workspacePhase.value !== 'slice' &&
+    workspacePhase.value !== 'preview' &&
+    workspacePhase.value !== 'animate'
+  ) {
+    return
   }
 
-  for (const path of layer.paths) {
-    if (path.points.length < 2) continue
+  const layers = result.preview.layers
+  const upTo =
+    workspacePhase.value === 'animate'
+      ? Math.min(activeLayerIndex.value, layers.length - 1)
+      : activeLayerIndex.value
+  const from = workspacePhase.value === 'animate' ? 0 : upTo
+  if (upTo < 0 || !layers[upTo]) return
 
-    switch (path.type) {
-      case 'perimeter':
-        ctx.strokeStyle = '#000000'
-        ctx.lineWidth = 2
-        break
-      case 'infill':
-        ctx.strokeStyle = '#409eff'
-        ctx.lineWidth = 1
-        break
-      case 'support':
-        ctx.strokeStyle = '#e6a23c'
-        ctx.lineWidth = 1
-        break
-      case 'travel':
-        ctx.strokeStyle = '#909399'
-        ctx.lineWidth = 0.5
-        ctx.setLineDash([4, 4])
-        break
-      default:
-        ctx.strokeStyle = '#000000'
-        ctx.lineWidth = 1
+  for (let li = from; li <= upTo; li++) {
+    const layer = layers[li]
+    if (!layer) continue
+    const z = layer.z
+    const isTop = li === upTo
+    const useFraction =
+      isTop &&
+      (workspacePhase.value === 'animate' || workspacePhase.value === 'preview') &&
+      animateLayerFraction.value < 1
+    const paths = useFraction
+      ? trimLayerPathsByFraction(layer.paths, animateLayerFraction.value)
+      : layer.paths.filter((p) => p.type !== 'travel' && p.points.length >= 2)
+    for (const path of paths) {
+      if (path.points.length < 2) continue
+      if (path.type === 'travel') continue
+      const positions: number[] = []
+      for (const [x, y] of path.points) {
+        positions.push(x, y, z) // platform Z-up
+      }
+      const geom = new THREE.BufferGeometry()
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+      const mat = new THREE.LineBasicMaterial({
+        color: pathColor(path.type),
+        depthTest: true,
+        transparent: true,
+        opacity: isTop ? (path.type === 'infill' ? 0.85 : 1) : 0.35,
+      })
+      const line = new THREE.Line(geom, mat)
+      sliceOverlayGroup.add(line)
     }
-
-    const firstPoint = path.points[0]
-    if (!firstPoint) continue
-
-    ctx.beginPath()
-    const [sx, sy] = mapPoint(firstPoint[0], firstPoint[1])
-    ctx.moveTo(sx, sy)
-    for (let i = 1; i < path.points.length; i++) {
-      const pt = path.points[i]
-      if (!pt) continue
-      const [x, y] = mapPoint(pt[0], pt[1])
-      ctx.lineTo(x, y)
-    }
-    ctx.stroke()
-    ctx.setLineDash([])
   }
 
-  ctx.restore()
+  // Ghost solid meshes while showing slices
+  for (const obj of objectByModelId.values()) {
+    obj.traverse((c) => {
+      const m = c as THREE.Mesh
+      if (!(m as any).isMesh) return
+      const mats = Array.isArray(m.material) ? m.material : [m.material]
+      for (const mat of mats) {
+        if (!mat || !(mat as THREE.Material).isMaterial) continue
+        const sm = mat as THREE.MeshStandardMaterial
+        sm.transparent = true
+        sm.opacity = 0.25
+        sm.depthWrite = false
+        sm.needsUpdate = true
+      }
+    })
+  }
+}
+
+function restoreMeshMaterialsSolid() {
+  for (const obj of objectByModelId.values()) {
+    obj.traverse((c) => {
+      const m = c as THREE.Mesh
+      if (!(m as any).isMesh) return
+      const mats = Array.isArray(m.material) ? m.material : [m.material]
+      for (const mat of mats) {
+        if (!mat || !(mat as THREE.Material).isMaterial) continue
+        const sm = mat as THREE.MeshStandardMaterial
+        // Don't fight selection highlight — only restore if not selected styling
+        sm.transparent = false
+        sm.opacity = 1
+        sm.depthWrite = true
+        sm.needsUpdate = true
+      }
+    })
+  }
+  syncSelectionHighlight()
 }
 
 watch(
-  () => [sliceResult.value, activeLayerIndex.value],
+  () => [sliceResult.value, activeLayerIndex.value, animateLayerFraction.value],
   () => {
-    drawSlicePreview()
-  }
+    updateSliceOverlay()
+  },
 )
+
+watch(workspacePhase, (phase) => {
+  if (phase === 'slice' || phase === 'preview' || phase === 'animate') updateSliceOverlay()
+  else {
+    stopAnimatePlayback()
+    clearSliceOverlay()
+    restoreMeshMaterialsSolid()
+  }
+})
+
+watch(animateSpeed, () => {
+  if (animatePlaying.value) startAnimatePlayback()
+})
+
+function stopAnimatePlayback() {
+  animatePlaying.value = false
+  if (animateTimer != null) {
+    clearInterval(animateTimer)
+    animateTimer = null
+  }
+}
+
+function startAnimatePlayback() {
+  stopAnimatePlayback()
+  const layers = sliceResult.value?.preview.layers
+  if (!layers?.length) return
+  animatePlaying.value = true
+  // Advance within-layer fraction first (Kiri setFraction), then step layers.
+  const ms = Math.max(40, Math.round(1000 / Math.max(1, animateSpeed.value * 4)))
+  animateTimer = setInterval(() => {
+    const max = Math.max(0, layers.length - 1)
+    const step = Math.min(0.12, 0.04 + animateSpeed.value * 0.008)
+    if (animateLayerFraction.value < 1 - 1e-6) {
+      animateLayerFraction.value = Math.min(1, animateLayerFraction.value + step)
+      return
+    }
+    animateLayerFraction.value = 0
+    if (activeLayerIndex.value >= max) {
+      activeLayerIndex.value = 0
+    } else {
+      activeLayerIndex.value += 1
+    }
+  }, ms)
+}
+
+function toggleAnimatePlayback() {
+  if (animatePlaying.value) stopAnimatePlayback()
+  else startAnimatePlayback()
+}
+
+function onAnimateFractionInput(ev: Event) {
+  const v = Number((ev.target as HTMLInputElement).value)
+  animateLayerFraction.value = Math.max(0, Math.min(1, (Number.isFinite(v) ? v : 1000) / 1000))
+}
+
+function onAnimateModeClick() {
+  if (!sliceResult.value) {
+    ElMessage.info('Slice first to animate')
+    return
+  }
+  workspacePhase.value = 'animate'
+  activeLayerIndex.value = 0
+  animateLayerFraction.value = 0
+  startAnimatePlayback()
+}
 
 async function buildSliceJobPayload(): Promise<SliceJobPayload | null> {
   const sceneModels: SceneModelPayload[] = []
@@ -1628,8 +1984,9 @@ async function buildSliceJobPayload(): Promise<SliceJobPayload | null> {
     const obj = objectByModelId.get(m.id)
     const t = transforms.get(m.id)
     if (!obj || !t) continue
+    if (!displayRoot) continue
 
-    const box = new THREE.Box3().setFromObject(obj)
+    const box = computeAabbInSpace(obj, displayRoot)
     const size = new THREE.Vector3()
     box.getSize(size)
 
@@ -1638,6 +1995,7 @@ async function buildSliceJobPayload(): Promise<SliceJobPayload | null> {
       name: m.name,
       ext: m.name.toLowerCase().split('.').pop() || '',
       transform: t,
+      extruder: Number.isFinite(m.extruder) ? Math.max(0, Math.floor(Number(m.extruder))) : 0,
       bbox: {
         size: { x: size.x, y: size.y, z: size.z },
         min: { x: box.min.x, y: box.min.y, z: box.min.z },
@@ -1688,6 +2046,183 @@ async function buildSliceJobPayload(): Promise<SliceJobPayload | null> {
   }
 }
 
+function onArrangeClick() {
+  stopAnimatePlayback()
+  workspacePhase.value = 'arrange'
+  clearSliceOverlay()
+}
+
+async function onSliceModeClick() {
+  stopAnimatePlayback()
+  workspacePhase.value = 'slice'
+  await onSliceClick()
+}
+
+function onPreviewModeClick() {
+  stopAnimatePlayback()
+  workspacePhase.value = 'preview'
+  onPreviewClick()
+}
+
+function onExportModeClick() {
+  stopAnimatePlayback()
+  workspacePhase.value = 'export'
+}
+
+function resetCameraHome() {
+  if (!camera) return
+  camera.position.set(180, 140, 180)
+  controls?.target.set(0, 0, 0)
+  controls?.update()
+}
+
+function setCameraTopView() {
+  if (!camera) return
+  camera.position.set(0, 320, 0.001)
+  controls?.target.set(0, 0, 0)
+  controls?.update()
+}
+
+function layFlatSelectedModel() {
+  const id = selectedModelId.value
+  if (!id) {
+    ElMessage.info('Select a model to lay flat')
+    return
+  }
+  const obj = objectByModelId.get(id)
+  const t = transforms.get(id)
+  if (!obj || !t) {
+    ElMessage.info('Lay flat: model not loaded')
+    return
+  }
+  if (!displayRoot) return
+
+  // Reset rotation, then re-seat in platform (Z-up) space
+  obj.rotation.set(0, 0, 0)
+  t.rotation.x = 0
+  t.rotation.y = 0
+  t.rotation.z = 0
+  const box = computeAabbInSpace(obj, displayRoot)
+  obj.position.x -= (box.min.x + box.max.x) * 0.5
+  obj.position.y -= (box.min.y + box.max.y) * 0.5
+  obj.position.z -= box.min.z
+  t.position.x = obj.position.x
+  t.position.y = obj.position.y
+  t.position.z = obj.position.z
+  activeTransform.value = t
+  updateModelInfo(id, models.value.find((m) => m.id === id)?.name || '', obj)
+  ElMessage.success('Model laid flat (rotation reset)')
+}
+
+async function duplicateSelectedModel() {
+  const id = selectedModelId.value
+  const item = models.value.find((m) => m.id === id)
+  if (!item) {
+    ElMessage.info('Select a model to duplicate')
+    return
+  }
+  if (!item.file) {
+    ElMessage.info('Duplicate requires an imported file (re-import Job placeholders first)')
+    return
+  }
+  const copyName = item.name.replace(/(\.[^.]+)$/, '-copy$1')
+  const idNew = `${copyName}-${item.file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  models.value.push({
+    id: idNew,
+    name: copyName,
+    file: item.file,
+    needsFile: false,
+    extruder: item.extruder ?? 0,
+  })
+  selectedModelId.value = idNew
+  selectedModelIds.value.clear()
+  selectedModelIds.value.add(idNew)
+  await loadSelectedModel()
+  const obj = objectByModelId.get(idNew)
+  if (obj) {
+    obj.position.x += 20
+    const t = ensureTransform(idNew, obj)
+    t.position.x = obj.position.x
+    activeTransform.value = t
+  }
+  syncSelectionHighlight()
+  ElMessage.success('Model duplicated')
+}
+
+function setRenderMode(mode: 'solid' | 'wire' | 'ghost') {
+  if (!meshGroup) return
+  meshGroup.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (!mesh.isMesh) return
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const mat of mats) {
+      if (!mat || !(mat as THREE.Material).isMaterial) continue
+      const m = mat as THREE.MeshStandardMaterial
+      if (mode === 'wire') {
+        m.wireframe = true
+        m.transparent = false
+        m.opacity = 1
+        m.depthWrite = true
+      } else if (mode === 'ghost') {
+        m.wireframe = false
+        m.transparent = true
+        m.opacity = 0.35
+        m.depthWrite = false
+      } else {
+        m.wireframe = false
+        m.transparent = false
+        m.opacity = 1
+        m.depthWrite = true
+      }
+      m.needsUpdate = true
+    }
+  })
+}
+
+function onFdmWorkspaceEvent(ev: Event) {
+  const detail = (ev as CustomEvent).detail as { action?: string; files?: File[] } | undefined
+  const action = detail?.action
+  if (!action) return
+  switch (action) {
+    case 'import-files':
+      if (detail?.files?.length) void importRawFiles(detail.files)
+      break
+    case 'export':
+      workspacePhase.value = 'export'
+      break
+    case 'lay-flat':
+      layFlatSelectedModel()
+      break
+    case 'duplicate':
+      void duplicateSelectedModel()
+      break
+    case 'delete':
+      if (selectedModelId.value) removeModel(selectedModelId.value)
+      else ElMessage.info('Select a model to delete')
+      break
+    case 'home':
+      resetCameraHome()
+      break
+    case 'top':
+      setCameraTopView()
+      break
+    case 'diagnostics':
+      showDiagnostics.value = !showDiagnostics.value
+      break
+    case 'render-solid':
+      setRenderMode('solid')
+      break
+    case 'render-wire':
+      setRenderMode('wire')
+      break
+    case 'render-ghost':
+      setRenderMode('ghost')
+      break
+    default:
+      break
+  }
+}
+
 async function onSliceClick() {
   if (fdmStore.slicing) return
   fdmStore.setSlicing(true)
@@ -1703,20 +2238,21 @@ async function onSliceClick() {
     const procRaw = await getFdmProcess(cur.process)
     const processConfig: FdmProcess | null = procRaw ? clonePlain(procRaw) : null
 
-    const vertices = exportSceneVerticesWorld()
-    if (!vertices.length) {
+    const modelMeshes = exportSceneModelMeshes()
+    if (!modelMeshes.length) {
       ElMessage.warning(FDM_ACTION_WARNING.noSliceableGeometry)
       return
     }
 
     const backend = getSliceBackend(fdmStore.backendKind)
-    const result = await backend.slice(job, vertices, processConfig ?? ({} as FdmProcess), {
+    const result = await backend.slice(job, modelMeshes, processConfig ?? ({} as FdmProcess), {
       onTelemetry: (event) => {
         fdmStore.pushSliceTelemetryEvent(event)
       },
     })
     fdmStore.setSliceResult(result)
     activeLayerIndex.value = 0
+    workspacePhase.value = 'slice'
     const currentDiagnostics =
       getSlicerDebugApi(window)?.exportDiagnostics({
         header: `jobId=${job.id}`,
@@ -1734,7 +2270,6 @@ async function onSliceClick() {
     })
 
     ElMessage.success(FDM_ACTION_SUCCESS.sliceSavedJob)
-    drawSlicePreview()
   } catch (e) {
     console.error(e)
     ElMessage.error(`${FDM_ACTION_ERROR.sliceFailedPrefix}${(e as Error).message || UNKNOWN_ERROR_MESSAGE}`)
@@ -1748,11 +2283,12 @@ function onPreviewClick() {
     ElMessage.info(FDM_ACTION_INFO.sliceRequired)
     return
   }
-  drawSlicePreview()
-  ElMessage.info('已刷新 2D 层预览；3D 折线视口随 sliceResult 更新。')
+  workspacePhase.value = 'preview'
+  updateSliceOverlay()
 }
 
 function onExportGcodeClick() {
+  workspacePhase.value = 'export'
   const result = fdmStore.sliceResult
   if (!result) {
     ElMessage.info(FDM_EXPORT_EMPTY.gcodeRequiresSlice)
@@ -1991,6 +2527,8 @@ async function onKiriPocClick() {
 }
 
 onBeforeUnmount(() => {
+  stopAnimatePlayback()
+  window.removeEventListener(FDM_WORKSPACE_EVENT, onFdmWorkspaceEvent as EventListener)
   uninstallSlicerDebugApi(window)
   disposeThree?.()
   disposeThree = undefined
@@ -1998,76 +2536,172 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.ws-root {
-  height: calc(100vh - 60px); /* 60px header from MainLayout */
-}
-.ws-aside,
-.ws-aside-right {
-  background: #fff;
-  border-right: 1px solid #dcdfe6;
-}
-.ws-aside-right {
-  border-left: 1px solid #dcdfe6;
-  border-right: none;
-  width: 22%;
-  min-width: 300px;
-  max-width: 380px;
-}
-.ws-center {
-  background: #f5f7fa;
-}
-.ws-viewport {
-  padding: 12px;
-}
-.ws-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-top: 1px solid #dcdfe6;
-  background: #fff;
-}
-.pane-title {
-  padding: 10px 12px;
-  font-weight: 600;
-  border-bottom: 1px solid #ebeef5;
-}
-.pane-body {
-  padding: 12px;
-}
-.placeholder {
-  color: #909399;
-}
-.viewport {
-  height: calc(100% - 36px);
-  min-height: 520px;
-  background: #fff;
-  border: 1px dashed #dcdfe6;
-  padding: 0;
-}
 .viewport-canvas {
   width: 100%;
   height: 100%;
   display: block;
 }
 
-.slice-preview-canvas {
-  width: 100%;
-  max-width: 360px;
-  height: 300px;
-  border: 1px solid #ebeef5;
-  background: #fff;
-  display: block;
+.km-hidden-file {
+  display: none;
 }
-.actions {
+
+.km-import-btn {
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--km-border, #ccc);
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.km-import-btn:hover {
+  background: #f0f0f0;
+}
+
+.km-import-btn.active {
+  background: rgba(126, 153, 183, 0.45);
+  border-color: #7e99b7;
+}
+
+.km-paint-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.km-paint-radius {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+}
+
+.km-paint-radius input[type='range'] {
+  flex: 1;
+  min-width: 80px;
+}
+
+.km-obj-del {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: #888;
+  padding: 0 4px;
+}
+
+.km-obj-ext {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.km-obj-ext select {
+  max-width: 44px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.km-obj-del:hover {
+  color: #c00;
+}
+
+.km-layer-range {
+  flex: 1;
+}
+
+.km-mode-export-wrap {
+  position: relative;
+  pointer-events: all;
+}
+.km-export-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  margin-top: 2px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--km-border, #ccc);
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+.km-export-menu > button {
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+.km-export-menu > button:hover {
+  background: var(--km-blue-4, #dde4ea);
+}
+
+.km-diagnostics {
+  font-size: 12px;
+}
+
+.km-diag-float {
+  position: absolute;
+  inset: 36px 12px 12px auto;
+  width: min(440px, 42vw);
+  z-index: 35;
+  pointer-events: all;
+}
+.km-diag-float-card {
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  background: rgba(245, 245, 245, 0.97);
+  border: 1px solid var(--km-border, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 0 0 8px;
+}
+.km-diag-float-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(126, 153, 183, 0.55);
+  padding: 4px 8px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.km-diag-close {
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  color: #444;
+}
+
+.km-diag-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 10px;
 }
-.hint {
-  color: #909399;
-  margin-left: 8px;
+
+.km-set-subheader {
+  font-weight: 600;
+  padding: 4px 0;
+  font-size: 13px;
 }
 
 :deep(.el-table .is-selected) {
@@ -2079,7 +2713,7 @@ onBeforeUnmount(() => {
 
 .job-diagnostics-pre {
   margin: 0;
-  max-height: 220px;
+  max-height: 180px;
   overflow: auto;
   padding: 8px;
   font-size: 11px;

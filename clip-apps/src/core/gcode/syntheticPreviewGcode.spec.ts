@@ -32,4 +32,17 @@ describe('syntheticPreviewGcode', () => {
     const built = buildGcodePathPositions(g)
     expect(built.vertexCount).toBeGreaterThanOrEqual(2)
   })
+
+  it('starts each group with G0 (no stitch across paths)', () => {
+    const g = buildSyntheticPreviewGcode({
+      headerComment: 'test',
+      groups: [
+        { points: [{ x: 0, y: 0, z: 0.2 }, { x: 1, y: 0, z: 0.2 }] },
+        { points: [{ x: 5, y: 5, z: 0.2 }, { x: 6, y: 5, z: 0.2 }] },
+      ],
+      firstMove: 'z-then-xy',
+    })
+    const g0Count = g.split('\n').filter((l) => l.startsWith('G0 ')).length
+    expect(g0Count).toBeGreaterThanOrEqual(4)
+  })
 })

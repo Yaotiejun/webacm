@@ -11,10 +11,10 @@ function mainLayoutChildren(): RouteRecordRaw[] {
 }
 
 describe('router.routes', () => {
-  it('keeps a single root layout with default redirect to settings', () => {
+  it('keeps a single root layout with default redirect to FDM workspace', () => {
     const children = mainLayoutChildren()
     const home = children.find((c) => c.path === '')
-    expect(home?.redirect).toBe('/settings')
+    expect(home?.redirect).toBe('/fdm')
   })
 
   it('registers expected workspace child paths (migration guard)', () => {
@@ -34,6 +34,8 @@ describe('router.routes', () => {
       'raster',
       'texturizer',
       'cam',
+      'laser',
+      'sla',
     ] as const
     for (const p of required) {
       expect(paths.has(p), `missing route path: ${p}`).toBe(true)

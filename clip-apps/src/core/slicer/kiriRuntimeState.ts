@@ -3,6 +3,8 @@ export interface KiriRuntimeState {
   initError: Error | null
   initPromise: Promise<void> | null
   fdmSliceImpl: any | null
+  fdmPrepareImpl: any | null
+  fdmExportImpl: any | null
   fakeDeviceProfile: any | null
   fakeControllerProfile: any | null
   legacySliceRunning: boolean
@@ -15,6 +17,8 @@ const state: KiriRuntimeState = {
   initError: null,
   initPromise: null,
   fdmSliceImpl: null,
+  fdmPrepareImpl: null,
+  fdmExportImpl: null,
   fakeDeviceProfile: null,
   fakeControllerProfile: null,
   legacySliceRunning: false,
@@ -27,16 +31,22 @@ export function getKiriRuntimeState(): KiriRuntimeState {
 
 export function clearLegacyImplBindings(): void {
   state.fdmSliceImpl = null
+  state.fdmPrepareImpl = null
+  state.fdmExportImpl = null
   state.fakeDeviceProfile = null
   state.fakeControllerProfile = null
 }
 
 export function bindLegacyImpl(input: {
   fdmSliceImpl: any
+  fdmPrepareImpl?: any
+  fdmExportImpl?: any
   fakeDeviceProfile: any
   fakeControllerProfile: any
 }): void {
   state.fdmSliceImpl = input.fdmSliceImpl
+  state.fdmPrepareImpl = input.fdmPrepareImpl ?? null
+  state.fdmExportImpl = input.fdmExportImpl ?? null
   state.fakeDeviceProfile = input.fakeDeviceProfile
   state.fakeControllerProfile = input.fakeControllerProfile
   state.lastLegacyFdmImportError = null

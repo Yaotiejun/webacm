@@ -9,6 +9,7 @@ import {
   loadCarveraMachineModel,
 } from '@/core/devices/carveraMachineModelLoader'
 import { filterFinitePathPositions3 } from '@/core/gcode/sanitizePathPositions'
+import { applyPathProgressDrawRanges } from '@/core/gcode/gcodePathProgressDraw'
 
 export type GcodeThreeToolPosition = { x: number; y: number; z: number }
 
@@ -23,6 +24,8 @@ export interface UseGcodeThreeViewportOptions {
   rapidPathColor?: number
   /** Cone / “tip” mesh color (default Carvera-style red) */
   tipColor?: number
+  /** Hide CNC-style tool tip/stem (SLA / raster arrange). */
+  hideToolMarker?: boolean
   cameraPosition?: [number, number, number]
   gridSize?: number
   gridDivisions?: number
@@ -33,6 +36,8 @@ export interface UseGcodeThreeViewportOptions {
   machineEnvelope?: MachineEnvelopeMm
   /** grip carve-control `carvera.obj` URL (Carvera workspace). */
   machineModelUrl?: string
+  /** 0..1 reveal of built path lines (CAM animate progress). Default 1 = full. */
+  pathProgress?: Ref<number>
 }
 
 function gcodeToThreePosition(x: number, y: number, z: number) {
@@ -64,6 +69,7 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
   let jobPathLines: THREE.Line[] = []
   let machineEnvelopeLines: THREE.LineSegments | null = null
   let machineModelRoot: THREE.Group | null = null
+  let animateStockGroup: THREE.Group | null = null
   let lastBuiltGcode = ''
   let rebuildTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -101,7 +107,10 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
   function rebuildJobPath() {
     if (!scene) return
     const text = opts.jobGcode.value ?? ''
-    if (text === lastBuiltGcode && jobPathLines.length > 0) return
+    if (text === lastBuiltGcode && jobPathLines.length > 0) {
+      applyPathProgress()
+      return
+    }
     lastBuiltGcode = text
     disposeJobPathLines()
     if (!text.trim()) {
@@ -120,9 +129,23 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
       for (const seg of built.segments) {
         addPathLine(seg.positions, seg.kind === 'rapid' ? rapidColor : opts.pathColor)
       }
+      applyPathProgress()
       return
     }
     addPathLine(built.positions, opts.pathColor)
+    applyPathProgress()
+  }
+
+  function applyPathProgress() {
+    const raw = opts.pathProgress?.value
+    const fraction = raw == null || !Number.isFinite(raw) ? 1 : raw
+    applyPathProgressDrawRanges(
+      jobPathLines.map((line) => ({
+        setDrawRange: (start, count) => line.geometry.setDrawRange(start, count),
+        getVertexCount: () => line.geometry.getAttribute('position')?.count ?? 0,
+      })),
+      fraction,
+    )
   }
 
   function disposeViewport() {
@@ -160,10 +183,63 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
       disposeCarveraMachineModel(machineModelRoot)
       machineModelRoot = null
     }
+    animateStockGroup = null
     lastBuiltGcode = ''
     if (rebuildTimer != null) clearTimeout(rebuildTimer)
     rebuildTimer = undefined
     viewportReady = false
+  }
+
+  function getOrCreateAnimateStockGroup(): THREE.Group | null {
+    if (!scene) return null
+    if (!animateStockGroup) {
+      animateStockGroup = new THREE.Group()
+      animateStockGroup.name = 'cam-animate-stock'
+      scene.add(animateStockGroup)
+    }
+    return animateStockGroup
+  }
+
+  function clearAnimateStockGroup() {
+    if (!animateStockGroup || !scene) {
+      animateStockGroup = null
+      return
+    }
+    while (animateStockGroup.children.length) {
+      const c = animateStockGroup.children.pop()!
+      animateStockGroup.remove(c)
+      c.traverse((obj) => {
+        const mesh = obj as THREE.Mesh
+        mesh.geometry?.dispose?.()
+        const mats = mesh.material as THREE.Material | THREE.Material[] | undefined
+        if (Array.isArray(mats)) mats.forEach((m) => m.dispose())
+        else mats?.dispose?.()
+      })
+    }
+    scene.remove(animateStockGroup)
+    animateStockGroup = null
+  }
+
+  /** Frame camera on animate-stock contents (Kiri-like after import/slice). */
+  function fitCameraToAnimateStock(padding = 2.4) {
+    if (!camera || !controls || !animateStockGroup) return false
+    const box = new THREE.Box3().setFromObject(animateStockGroup)
+    if (box.isEmpty()) return false
+    const size = new THREE.Vector3()
+    const center = new THREE.Vector3()
+    box.getSize(size)
+    box.getCenter(center)
+    const maxDim = Math.max(size.x, size.y, size.z, 1)
+    const dist = maxDim * padding + 12
+    camera.position.set(center.x + dist * 0.85, center.y + dist * 0.7, center.z + dist * 0.85)
+    camera.near = Math.max(0.01, dist / 200)
+    camera.far = Math.max(1000, dist * 20)
+    camera.updateProjectionMatrix()
+    controls.target.copy(center)
+    controls.minDistance = Math.max(1, maxDim * 0.2)
+    controls.maxDistance = Math.max(controls.minDistance * 20, dist * 8)
+    controls.update()
+    return true
   }
 
   function tick() {
@@ -264,25 +340,27 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
         })
     }
 
-    toolMarker = new THREE.Group()
-    const stemHex = Number.isFinite(opts.stemColor.value) ? opts.stemColor.value : 0x909399
-    const stem = new THREE.Mesh(
-      new THREE.CylinderGeometry(2, 3.5, 22, 16),
-      new THREE.MeshStandardMaterial({
-        color: stemHex,
-        metalness: 0.15,
-        roughness: 0.55,
-      }),
-    )
-    stem.position.y = 11
-    const tip = new THREE.Mesh(
-      new THREE.ConeGeometry(3.2, 10, 16),
-      new THREE.MeshStandardMaterial({ color: tipColor, metalness: 0.2, roughness: 0.45 }),
-    )
-    tip.position.y = 1
-    tip.rotation.x = Math.PI
-    toolMarker.add(stem, tip)
-    scene.add(toolMarker)
+    if (!opts.hideToolMarker) {
+      toolMarker = new THREE.Group()
+      const stemHex = Number.isFinite(opts.stemColor.value) ? opts.stemColor.value : 0x909399
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(2, 3.5, 22, 16),
+        new THREE.MeshStandardMaterial({
+          color: stemHex,
+          metalness: 0.15,
+          roughness: 0.55,
+        }),
+      )
+      stem.position.y = 11
+      const tip = new THREE.Mesh(
+        new THREE.ConeGeometry(3.2, 10, 16),
+        new THREE.MeshStandardMaterial({ color: tipColor, metalness: 0.2, roughness: 0.45 }),
+      )
+      tip.position.y = 1
+      tip.rotation.x = Math.PI
+      toolMarker.add(stem, tip)
+      scene.add(toolMarker)
+    }
 
     controls = new OrbitControls(camera, canvas)
     controls.enableDamping = true
@@ -291,7 +369,8 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
     controls.maxDistance = maxOrbit
 
     updateToolFromMachine()
-    camera.lookAt(toolMarker.position)
+    if (toolMarker) camera.lookAt(toolMarker.position)
+    else camera.lookAt(0, 0, 0)
 
     resizeObs = new ResizeObserver(() => {
       layoutViewport()
@@ -327,6 +406,10 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
 
   watch(opts.stemColor, applyStemColor, { immediate: true })
 
+  if (opts.pathProgress) {
+    watch(opts.pathProgress, () => applyPathProgress())
+  }
+
   watch([opts.rootRef, opts.canvasRef], tryInitViewport, { flush: 'post' })
 
   onMounted(() => {
@@ -337,5 +420,5 @@ export function useGcodeThreeViewport(opts: UseGcodeThreeViewportOptions) {
     disposeViewport()
   })
 
-  return { jobPathHint }
+  return { jobPathHint, getOrCreateAnimateStockGroup, clearAnimateStockGroup, fitCameraToAnimateStock }
 }

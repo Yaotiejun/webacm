@@ -98,7 +98,7 @@
 
         <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap">
           <el-button size="small" type="success" :disabled="!canRun" :loading="running" @click="onRun">
-            应用纹理位移（占位）
+            应用纹理位移
           </el-button>
           <el-button size="small" plain :disabled="!summary || stlExporting" @click="onExportJson">导出 JSON</el-button>
           <el-select v-model="stlExportFormat" size="small" style="width: 108px; margin-right: 8px">
@@ -882,7 +882,7 @@ async function onRun() {
       vertices: Array.from(res.vertices),
     })
 
-    ElMessage.success('已应用占位纹理位移')
+    ElMessage.success('已应用纹理位移')
   } catch (err: any) {
     ElMessage.error(`应用失败：${err?.message ?? String(err)}`)
   } finally {

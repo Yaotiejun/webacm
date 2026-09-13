@@ -7,6 +7,11 @@ import { getKiriFdmLegacyHealth, sliceWithKiri } from '@/core/slicer/kiriEngine'
 import { buildMockSliceResult, withDerivedJobBounds } from '@/core/slicer/mockSlicer'
 import { resolveKiriFallbackReason } from '@/core/slicer/kiriFallbackReason'
 import { buildSliceFallbackTelemetryEvent } from '@/core/slicer/sliceTelemetry'
+import {
+  mergeSliceModelMeshes,
+  normalizeSliceModelMeshes,
+  type SliceModelMesh,
+} from '@/core/slicer/sliceModelMeshes'
 
 async function doSlice(job: SliceJobPayload, proc: FdmProcess, vertices: Float32Array): Promise<SliceResult> {
   await new Promise((r) => setTimeout(r, 300))
@@ -14,14 +19,21 @@ async function doSlice(job: SliceJobPayload, proc: FdmProcess, vertices: Float32
 }
 
 self.onmessage = async (ev: MessageEvent) => {
-  const { job, vertices, process, backendKind } = ev.data as {
+  const data = ev.data as {
     job: SliceJobPayload
-    vertices: Float32Array
+    vertices?: Float32Array
+    modelMeshes?: SliceModelMesh[]
     process: FdmProcess
     backendKind: SliceBackendKind
   }
+  const { job, process, backendKind } = data
   try {
-    if (!vertices || !vertices.length) {
+    const meshes = normalizeSliceModelMeshes(
+      data.modelMeshes?.length ? data.modelMeshes : data.vertices ?? new Float32Array(),
+      job,
+    )
+    const vertices = mergeSliceModelMeshes(meshes)
+    if (!vertices.length) {
       throw new Error('missing vertices for slicing')
     }
 
@@ -30,9 +42,10 @@ self.onmessage = async (ev: MessageEvent) => {
         // eslint-disable-next-line no-console
         console.debug('[slicer.worker] starting Kiri slice', {
           models: job.models.length,
+          meshParts: meshes.length,
           vertices: vertices.length,
         })
-        const result = await sliceWithKiri(job, vertices, process)
+        const result = await sliceWithKiri(job, meshes, process)
         // eslint-disable-next-line no-console
         console.debug('[slicer.worker] finished Kiri slice', {
           layers: result.summary.layers,

@@ -93,4 +93,48 @@ describe('kiriLegacyFdmSlice.integration', () => {
     },
     90_000,
   )
+
+  it(
+    'runs fdm_slice → fdm_prepare → fdm_export and emits G-code',
+    async () => {
+      const { newPoint } = await import('./kiriLegacyGeo')
+      const { fdm_slice, fdm_export } = await import('./kiriLegacyFdmBootstrap')
+      const { pointsFromVertices, computeVertexBounds3D } = await import('./geometry')
+      const { runLegacyFdmPrepare } = await import('./fdmLegacyPrepare')
+      const { collectFdmExportGcode } = await import('./fdmExportCollect')
+
+      const vertices = cubeVertices()
+      const vb = computeVertexBounds3D(vertices)!
+      const pts = pointsFromVertices(vertices, newPoint)
+      const settings = buildKiriSettingsPayload({
+        process: minimalProcess(),
+        modelCount: 1,
+        deviceProfile: null,
+        controllerProfile: null,
+      })
+
+      const sliced = await runLegacyFdmSliceBridge({
+        settings,
+        vb,
+        points: pts,
+        fdmSliceImpl: fdm_slice,
+        workerScope: globalThis as any,
+        timeoutMs: 60_000,
+      })
+      expect(sliced.widget.slices.length).toBeGreaterThan(0)
+
+      const prepared = await runLegacyFdmPrepare(
+        [sliced.widget],
+        sliced.settings,
+        undefined,
+        globalThis as any,
+      )
+      expect(prepared.print.output.length).toBeGreaterThan(0)
+
+      const collected = collectFdmExportGcode(fdm_export, prepared.print)
+      expect(collected.gcodeText.length).toBeGreaterThan(50)
+      expect(collected.gcodeText).toMatch(/G[01]\b/)
+    },
+    120_000,
+  )
 })

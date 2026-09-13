@@ -14,6 +14,8 @@ export interface SceneModelPayload {
     min: { x: number; y: number; z: number }
     max: { x: number; y: number; z: number }
   }
+  /** Multi-extruder tool index (Kiri widget.anno.extruder). */
+  extruder?: number
 }
 
 export interface SliceJobPayload {

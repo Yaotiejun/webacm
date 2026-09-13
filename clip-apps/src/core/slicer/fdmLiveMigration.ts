@@ -125,6 +125,18 @@ export async function evaluateFdmLiveMigration(): Promise<FdmLiveMigrationResult
   if (!legacyRan && health.hasSliceImpl === false) {
     errors.push('legacy fdm_slice not loaded — placeholder preview only')
   }
+  if (legacyRan && (!result.gcodeText || !/G[01]\b/i.test(result.gcodeText))) {
+    errors.push('legacy G-code missing motion moves')
+  }
+  if (
+    legacyRan &&
+    health.hasPrepareImpl &&
+    health.hasExportImpl &&
+    result.gcodeSource !== 'legacy-fdm-export' &&
+    result.gcodeSource !== 'legacy-preview-path'
+  ) {
+    errors.push(`unexpected gcodeSource=${result.gcodeSource ?? 'none'}`)
+  }
 
   const ok = layerCount >= 1 && errors.every((e) => !e.includes('runtime not ready'))
 
@@ -136,7 +148,7 @@ export async function evaluateFdmLiveMigration(): Promise<FdmLiveMigrationResult
     layerCount,
     fallbackReason,
     detail: legacyRan
-      ? `legacy slice ok (${layerCount} layers)`
+      ? `legacy slice ok (${layerCount} layers, gcode=${result.gcodeSource ?? 'none'})`
       : `placeholder/fallback path (${fallbackReason ?? 'none'}, ${layerCount} layers)`,
     errors,
   }

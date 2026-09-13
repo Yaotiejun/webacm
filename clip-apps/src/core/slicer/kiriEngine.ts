@@ -1,15 +1,13 @@
-// Kiri 切片引擎占位文件
-// 后续会从 F:\3d\chip\grip\grid-apps-master 中引入 Kiri/Moto 的核心 JS 到 legacy 目录，
-// 再在这里做 TS 封装，向外暴露统一的 slice 接口。
+// Kiri FDM slice engine — `fdm_slice` → `fdm_prepare` → `fdm_export` (preview-path fallback).
 
 import type { SliceJobPayload } from '@/types/job'
 import type { FdmProcess } from '@/types/process'
 import type { SliceLayerPreview, SlicePath2D, SliceResult } from '@/api/slice'
-import { convertWidgetSlicesToLayers, polyToPath } from '@/core/slicer/previewConvert'
+import { polyToPath } from '@/core/slicer/previewConvert'
 import { computeVertexBounds3D, pointsFromVertices } from '@/core/slicer/geometry'
 import { estimateLayerCount, resolvePreviewLayers } from '@/core/slicer/previewPipeline'
 import { buildKiriSettingsPayload } from '@/core/slicer/kiriSettingsAdapter'
-import { runLegacyFdmSliceBridge } from '@/core/slicer/kiriLegacyBridge'
+import { runLegacyFdmSliceBridgeMulti, type LegacyFdmSliceBridgeResult } from '@/core/slicer/kiriLegacyBridge'
 import { bindLegacyImpl, clearLegacyImplBindings, getKiriRuntimeState, runWithLegacySliceGuard } from '@/core/slicer/kiriRuntimeState'
 import { loadLegacyFdmRuntime } from '@/core/slicer/kiriRuntimeLoader'
 import { estimateSummaryFromPreview, syncSliceSummaryTimeFromEstimateMeta } from '@/core/slicer/previewEstimate'
@@ -21,6 +19,17 @@ import {
   type LegacyFdmMode,
 } from '@/core/slicer/kiriRuntimePolicy'
 import { buildLegacyGateSnapshot, resolveLegacyFailureTelemetry, resolveLegacyFallbackBeforeRun } from '@/core/slicer/kiriFallbackDecision'
+import { buildFdmGcodeFromPreview } from '@/core/slicer/fdmExportGcodeFromPreview'
+import { getStockFdmDevice, resolveStockFdmDeviceId } from '@/core/slicer/stock/fdm/stockFdmDevices'
+import { fdmDeviceToLegacyProfile } from '@/core/slicer/normalizeFdmDevice'
+import { collectFdmExportGcode } from '@/core/slicer/fdmExportCollect'
+import { runLegacyFdmPrepare } from '@/core/slicer/fdmLegacyPrepare'
+import {
+  mergeSliceModelMeshes,
+  normalizeSliceModelMeshes,
+  type SliceGeometryInput,
+  type SliceModelMesh,
+} from '@/core/slicer/sliceModelMeshes'
 
 interface KiriFdmRuntime {
   init(): Promise<void>
@@ -82,6 +91,8 @@ export function getKiriFdmLegacyHealth(): {
   ready: boolean
   initErrorMessage: string | null
   hasSliceImpl: boolean
+  hasPrepareImpl: boolean
+  hasExportImpl: boolean
   legacyImportErrorMessage: string | null
 } {
   const state = getKiriRuntimeState()
@@ -89,6 +100,8 @@ export function getKiriFdmLegacyHealth(): {
     ready: state.ready,
     initErrorMessage: state.initError?.message ?? null,
     hasSliceImpl: typeof state.fdmSliceImpl === 'function',
+    hasPrepareImpl: typeof state.fdmPrepareImpl === 'function',
+    hasExportImpl: typeof state.fdmExportImpl === 'function',
     legacyImportErrorMessage: state.lastLegacyFdmImportError,
   }
 }
@@ -107,18 +120,40 @@ export function __debugKiriRuntimeStatus() {
     ready: state.ready,
     initError: state.initError?.message,
     hasImpl: !!state.fdmSliceImpl,
+    hasPrepare: !!state.fdmPrepareImpl,
+    hasExport: !!state.fdmExportImpl,
     legacyImportError: state.lastLegacyFdmImportError,
   })
 }
 
 function buildKiriSettings(job: SliceJobPayload, process: FdmProcess): any {
   const state = getKiriRuntimeState()
-  return buildKiriSettingsPayload({
+  const stock = getStockFdmDevice(resolveStockFdmDeviceId(job.device || ''))
+  const deviceProfile = stock
+    ? fdmDeviceToLegacyProfile(stock)
+    : state.fakeDeviceProfile
+  const primaryExtruder = job.models.find((m) => Number.isFinite(m.extruder))?.extruder ?? 0
+  const payload = buildKiriSettingsPayload({
     process,
     modelCount: job.models.length,
-    deviceProfile: state.fakeDeviceProfile,
+    deviceProfile,
     controllerProfile: state.fakeControllerProfile,
   })
+  const jb = job.jobBounds
+  const bounds = jb
+    ? {
+        min: { x: jb.min.x, y: jb.min.y, z: jb.min.z },
+        max: { x: jb.max.x, y: jb.max.y, z: jb.max.z },
+      }
+    : undefined
+  return {
+    ...payload,
+    bounds,
+    jobMeta: {
+      ...(payload.jobMeta as Record<string, unknown>),
+      primaryExtruder: Math.max(0, Math.floor(Number(primaryExtruder) || 0)),
+    },
+  }
 }
 
 function buildKiriVertices(vertices: Float32Array): Float32Array {
@@ -192,7 +227,7 @@ async function tryInjectKiriPerimeters(
   return nextLayers
 }
 
-async function runLegacyFdmSliceToPreview(settings: any, vertices: Float32Array) {
+async function runLegacyFdmSliceToPreview(settings: any, meshes: SliceModelMesh[]) {
   return runWithLegacySliceGuard(async () => {
     if (!kiriRuntime.isReady() || kiriRuntime.getError()) {
       throw new Error('kiri runtime not ready')
@@ -202,42 +237,60 @@ async function runLegacyFdmSliceToPreview(settings: any, vertices: Float32Array)
     }
 
     const { newPoint } = await import('@/core/slicer/kiriLegacyGeo')
-
-    const vb = computeVertexBounds3D(vertices)
-    if (!vb) {
-      throw new Error('invalid vertex bounds')
+    const widgetSpecs = []
+    for (const mesh of meshes) {
+      const vb = computeVertexBounds3D(mesh.vertices)
+      if (!vb) continue
+      const pts = pointsFromVertices(mesh.vertices, newPoint)
+      if (!pts.length) continue
+      widgetSpecs.push({
+        id: mesh.modelId || `mesh-${widgetSpecs.length}`,
+        vb,
+        points: pts,
+        extruder: Number.isFinite(mesh.extruder) ? Math.max(0, Math.floor(Number(mesh.extruder))) : 0,
+        paint: Array.isArray(mesh.paint) ? mesh.paint : undefined,
+      })
     }
-
-    const pts = pointsFromVertices(vertices, newPoint)
-    if (!pts.length) {
+    if (!widgetSpecs.length) {
       throw new Error('no mesh points for legacy slice')
     }
-    return runLegacyFdmSliceBridge({
+
+    let fdmSliceAllImpl: ((settings: any, onupdate?: Function) => void) | undefined
+    try {
+      const boot = await import('@/core/slicer/kiriLegacyFdmBootstrap')
+      if (typeof boot.sliceAll === 'function') fdmSliceAllImpl = boot.sliceAll
+    } catch {
+      fdmSliceAllImpl = undefined
+    }
+
+    return runLegacyFdmSliceBridgeMulti({
       settings,
-      vb,
-      points: pts,
+      widgets: widgetSpecs,
       fdmSliceImpl: getKiriRuntimeState().fdmSliceImpl!,
       workerScope: self as any,
       timeoutMs: getLegacySliceTimeoutMs(),
+      fdmSliceAllImpl,
     })
   })
 }
 
-// 当前 sliceWithKiri 仍为“占位 Kiri”输出（用于 UI/Jobs 全流程验证）。
-// 本阶段仅增加 runtime 初始化与输入适配骨架，不改变输出与行为。
+// After legacy `fdm_slice`, prefer `fdm_prepare`→`fdm_export`; fall back to preview-path G-code.
 export async function sliceWithKiri(
   job: SliceJobPayload,
-  vertices: Float32Array,
+  geometry: SliceGeometryInput,
   process: FdmProcess,
 ): Promise<SliceResult> {
   // Load runtime skeleton (ignore failure; keep placeholder behavior).
   await kiriRuntime.init()
   __debugKiriRuntimeStatus()
 
+  const meshes = normalizeSliceModelMeshes(geometry, job)
+  const vertices = mergeSliceModelMeshes(meshes)
   const settings = buildKiriSettings(job, process)
 
   // Try to run legacy Kiri FDM and convert widget.slices → preview.
   // Any failure keeps placeholder behavior.
+  let legacyBridge: LegacyFdmSliceBridgeResult | null = null
   let legacyPreview: { bounds: { minX: number; minY: number; maxX: number; maxY: number }; layers: SliceLayerPreview[] } | null =
     null
   let fallback: SliceResult['fallback'] = null
@@ -253,7 +306,8 @@ export async function sliceWithKiri(
   fallback = decision.fallback
   if (decision.shouldRunLegacy) {
     try {
-      legacyPreview = await runLegacyFdmSliceToPreview(settings, vertices)
+      legacyBridge = await runLegacyFdmSliceToPreview(settings, meshes)
+      legacyPreview = legacyBridge
       fallback = null
     } catch (e) {
       const telemetry = resolveLegacyFailureTelemetry(e)
@@ -297,6 +351,58 @@ export async function sliceWithKiri(
   })
   const summary = syncSliceSummaryTimeFromEstimateMeta(estimateSummaryFromPreview(resolvedPreview.layers, process))
 
+  let gcodeText: string | undefined
+  let gcodeSource: SliceResult['gcodeSource']
+
+  const state = getKiriRuntimeState()
+  const prepareWidgets =
+    legacyBridge?.widgets?.length
+      ? legacyBridge.widgets
+      : legacyBridge?.widget
+        ? [legacyBridge.widget]
+        : []
+  if (
+    prepareWidgets.length > 0 &&
+    typeof state.fdmExportImpl === 'function' &&
+    prepareWidgets.some((w) => Array.isArray(w?.slices) && w.slices.length > 0)
+  ) {
+    try {
+      const prepared = await runLegacyFdmPrepare(
+        prepareWidgets,
+        legacyBridge!.settings,
+        undefined,
+        self as any,
+      )
+      const collected = collectFdmExportGcode(state.fdmExportImpl, prepared.print)
+      if (collected.gcodeText && /G[01]\b/i.test(collected.gcodeText)) {
+        gcodeText = collected.gcodeText
+        gcodeSource = 'legacy-fdm-export'
+        if (summary.filamentMm <= 0) {
+          const m = collected.gcodeText.match(/filament used:\s*([\d.]+)/i)
+          if (m) summary.filamentMm = Number(m[1]) || summary.filamentMm
+        }
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[kiriEngine] legacy fdm_prepare/export failed, using preview-path G-code', {
+        message: (e as any)?.message ?? String(e),
+      })
+    }
+  }
+
+  if (!gcodeText) {
+    const exported = buildFdmGcodeFromPreview(resolvedPreview, {
+      process,
+      deviceName: job.device,
+      jobName: job.name,
+    })
+    gcodeText = exported.gcodeText
+    gcodeSource = exported.source
+    if (exported.source === 'legacy-preview-path' && summary.filamentMm <= 0 && exported.extrudedMm > 0) {
+      summary.filamentMm = Math.round(exported.extrudedMm * 10) / 10
+    }
+  }
+
   return {
     summary,
     preview: resolvedPreview,
@@ -304,5 +410,7 @@ export async function sliceWithKiri(
     fallback: enrichFallbackWithLegacyImportHint(fallback),
     inputMeta: buildSliceInputMeta(vertices),
     legacyDebug: getKiriFdmLegacyHealth(),
+    gcodeText,
+    gcodeSource,
   }
 }

@@ -22,6 +22,7 @@ function isRealWasmFile(filePath) {
 const candidates = [
   path.join(clipApps, 'node_modules', 'manifold-3d', 'manifold.wasm'),
   path.resolve(repoRoot, '..', 'grip', 'grid-apps-master', 'src', 'wasm', 'manifold.wasm'),
+  path.resolve(repoRoot, '..', 'Kiri-Moto', 'grid-apps-master', 'src', 'wasm', 'manifold.wasm'),
   path.join(repoRoot, 'wasm', 'manifold.wasm'),
 ]
 

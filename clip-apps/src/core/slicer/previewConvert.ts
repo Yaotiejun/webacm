@@ -1,5 +1,14 @@
 import type { SliceLayerPreview, SlicePath2D } from '@/api/slice'
 
+export type ConvertWidgetSlicesOptions = {
+  /**
+   * Match Kiri `layerRender` devel/xray extras (gaps, fill_off, last, solids, bridges, flats, lines, groups).
+   * Default false = Kiri normal slice view.
+   */
+  devel?: boolean
+  xray?: boolean
+}
+
 export function polyToPath(poly: any, type: SlicePath2D['type']): SlicePath2D | null {
   const arr: Array<[number, number]> = []
   const pts = poly?.points
@@ -64,7 +73,6 @@ function resolveLineAsType(
 /**
  * Line records (`{ p1, p2 }`, `[a,b]`, …) **or** flat paired endpoints (same layout as
  * `POLY.fillArea` output and paired `Point` pushes in `post.js` / `slice.js`).
- * Used for **`top.fill_lines`**, **`top.thin_fill`**, and **`slice.lines`** (travel).
  */
 function pushSegmentArray(
   paths: SlicePath2D[],
@@ -108,28 +116,57 @@ function pushFillLines(paths: SlicePath2D[], fillLines: any[] | undefined) {
   pushSegmentArray(paths, fillLines, 'infill')
 }
 
-/** Legacy `slice.lines`: `{ p1, p2 }`, `{ start, end }`, line tuples, or flat paired `Point` rows. */
 function pushSliceLines(paths: SlicePath2D[], lines: any[] | undefined) {
   pushSegmentArray(paths, lines, 'travel', { startEndWrap: true })
 }
 
-/** Kiri `thin_wall` traces: arrays of `{x,y}` points (see legacy `fdm/post.js`). */
-function pushThinWallTraces(paths: SlicePath2D[], traces: any) {
+/** Approximate Kiri `centerCircle(p, r, 12)` for thin_wall single-point walls. */
+function circlePath(cx: number, cy: number, r: number, type: SlicePath2D['type']): SlicePath2D | null {
+  if (!(r > 0) || !Number.isFinite(cx) || !Number.isFinite(cy)) return null
+  const pts: Array<[number, number]> = []
+  const n = 12
+  for (let i = 0; i <= n; i++) {
+    const a = (Math.PI * 2 * i) / n
+    pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r])
+  }
+  return { type, points: pts }
+}
+
+/**
+ * Kiri non-thin `thin_wall`: length-1 → circle(r/2); else closed polyline through points.
+ * @see grid-apps `fdm/work/slice.js` layerRender
+ */
+function pushThinWallKiriStyle(paths: SlicePath2D[], traces: any) {
   if (!Array.isArray(traces)) return
   for (const trace of traces) {
-    if (!Array.isArray(trace)) continue
-    for (let i = 1; i < trace.length; i++) {
-      const a = trace[i - 1]
-      const b = trace[i]
-      if (!a || !b) continue
-      const path = lineToPath({ p1: a, p2: b }, 'perimeter')
+    if (!Array.isArray(trace) || trace.length === 0) continue
+    if (trace.length === 1) {
+      const p = trace[0]
+      const x = Number(p?.x)
+      const y = Number(p?.y)
+      const r = Number(p?.r)
+      const path = circlePath(x, y, (Number.isFinite(r) && r > 0 ? r : 0.2) / 2, 'perimeter')
       if (path) paths.push(path)
+      continue
     }
+    const path = polyToPath({ points: trace }, 'perimeter')
+    if (path) paths.push(path)
   }
 }
 
-export function convertWidgetSlicesToLayers(slices: any[]): SliceLayerPreview[] {
+/**
+ * Convert legacy `widget.slices` to 2D preview layers using **Kiri `layerRender` defaults**
+ * (shells, fill_lines, fill_sparse, thin_fill, thin_wall, supports).
+ * Devel/xray extras are opt-in so the canvas matches Kiri's normal slice view.
+ */
+export function convertWidgetSlicesToLayers(
+  slices: any[],
+  opts?: ConvertWidgetSlicesOptions,
+): SliceLayerPreview[] {
+  const devel = Boolean(opts?.devel)
+  const xray = Boolean(opts?.xray)
   const layers: SliceLayerPreview[] = []
+
   for (const s of slices || []) {
     if (!s) continue
     const z = typeof s.z === 'number' ? s.z : 0
@@ -147,40 +184,38 @@ export function convertWidgetSlicesToLayers(slices: any[]): SliceLayerPreview[] 
           shellPathCount++
         }
       }
-      // Slice outline when shell polygons are not emitted yet (pre-/thin-shell paths).
+      // Fallback outline only when no shells yet (pre-shell / thin path).
       if (shellPathCount === 0 && top.poly) {
         const outline = polyToPath(top.poly, 'perimeter')
         if (outline) paths.push(outline)
       }
 
-      pushPolyList(paths, top.last, 'perimeter')
-      pushPolyList(paths, top.fill_off, 'infill')
-      pushPolyList(paths, top.gaps, 'infill')
-
-      // Same line layouts as `fill_lines`: `addLines(top.thin_fill)` in `fdm/slice.js`; includes
-      // flat pairs from `cullIntersections` / `fillArea` (`post.js` thin shell path).
+      pushThinWallKiriStyle(paths, top.thin_wall)
+      pushFillLines(paths, top.fill_lines)
+      pushPolyList(paths, top.fill_sparse, 'infill')
       pushFillLines(paths, top.thin_fill)
 
-      pushThinWallTraces(paths, top.thin_wall)
-
-      pushFillLines(paths, top.fill_lines)
-      const sparse = Array.isArray(top.fill_sparse) ? top.fill_sparse : []
-      for (const poly of sparse) {
-        const path = polyToPath(poly, 'infill')
-        if (path) paths.push(path)
+      if (devel) {
+        pushPolyList(paths, top.gaps, 'infill')
+        pushPolyList(paths, top.fill_off, 'infill')
+        pushPolyList(paths, top.last, 'perimeter')
+        pushPolyList(paths, top.solids, 'infill')
+        pushPolyList(paths, top.bridges, 'infill')
       }
-
-      pushPolyList(paths, top.solids, 'infill')
-      pushPolyList(paths, top.bridges, 'infill')
     }
 
-    pushPolyList(paths, s.groups, 'perimeter')
-    pushPolyList(paths, s.solids, 'infill')
-    pushPolyList(paths, s.bridges, 'infill')
-    pushPolyList(paths, s.flats, 'infill')
+    if (devel) {
+      pushPolyList(paths, s.solids, 'infill')
+      pushPolyList(paths, s.bridges, 'infill')
+      pushPolyList(paths, s.flats, 'infill')
+    }
 
-    pushSliceLines(paths, s.lines)
+    if (xray) {
+      pushPolyList(paths, s.groups, 'perimeter')
+      pushSliceLines(paths, s.lines)
+    }
 
+    // Kiri always draws support outlines + support.fill (when present).
     const supports = Array.isArray(s.supports) ? s.supports : []
     for (const sup of supports) {
       const path = polyToPath(sup, 'support')
@@ -191,4 +226,65 @@ export function convertWidgetSlicesToLayers(slices: any[]): SliceLayerPreview[] 
     if (paths.length) layers.push({ z, paths })
   }
   return layers
+}
+
+/**
+ * Merge multiple widgets' slice stacks by Z (Kiri multi-part preview).
+ * Paths from later widgets append onto the same layer key.
+ */
+export function mergeWidgetSlicesToLayers(
+  widgets: Array<{ slices?: any[] }>,
+  opts?: ConvertWidgetSlicesOptions,
+): SliceLayerPreview[] {
+  const byZ = new Map<number, SlicePath2D[]>()
+  const zOrder: number[] = []
+
+  for (const w of widgets || []) {
+    const layers = convertWidgetSlicesToLayers(w.slices || [], opts)
+    for (const layer of layers) {
+      const zKey = Number(layer.z.toFixed(3))
+      let paths = byZ.get(zKey)
+      if (!paths) {
+        paths = []
+        byZ.set(zKey, paths)
+        zOrder.push(zKey)
+      }
+      paths.push(...layer.paths)
+    }
+  }
+
+  zOrder.sort((a, b) => a - b)
+  return zOrder.map((z) => ({ z, paths: byZ.get(z) || [] })).filter((l) => l.paths.length > 0)
+}
+
+/** Bounds from path points (Kiri-like framing); falls back to null if empty. */
+export function computePreviewBoundsFromLayers(
+  layers: SliceLayerPreview[],
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const layer of layers) {
+    for (const path of layer.paths) {
+      for (const pt of path.points) {
+        const x = pt[0]
+        const y = pt[1]
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  if (!(maxX > minX) || !(maxY > minY)) return null
+  const padX = Math.max(0.5, (maxX - minX) * 0.02)
+  const padY = Math.max(0.5, (maxY - minY) * 0.02)
+  return {
+    minX: minX - padX,
+    minY: minY - padY,
+    maxX: maxX + padX,
+    maxY: maxY + padY,
+  }
 }

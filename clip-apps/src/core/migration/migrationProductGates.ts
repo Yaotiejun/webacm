@@ -6,8 +6,11 @@ import { evaluateTexturizerMigrationComplete } from '@/core/texturizer/texturize
 import { evaluateBackendMigrationComplete } from '@/core/migration/backendMigrationComplete'
 import { evaluateOtherMigrationComplete } from '@/core/migration/otherMigrationComplete'
 import { evaluateFdmMigrationComplete } from '@/core/slicer/fdmMigrationComplete'
+import { evaluateFdmSupportPaintMigrationComplete } from '@/core/fdm/fdmSupportPaintMigrationComplete'
 import { evaluateDeviceBridgeMigrationComplete } from '@/core/migration/deviceBridgeMigrationComplete'
 import { evaluateBootstrapMigrationComplete } from '@/core/bootstrap/bootstrapMigrationComplete'
+import { evaluateLaserMigrationComplete } from '@/core/laser/laserMigrationComplete'
+import { evaluateSlaMigrationComplete } from '@/core/sla/slaMigrationComplete'
 import { computeMigrationProgressTotals } from '@/core/migration/migrationProgressScoreboard'
 
 export interface MigrationProductGateRow {
@@ -21,6 +24,10 @@ export interface MigrationProductGatesReport {
   gates: MigrationProductGateRow[]
   /** FDM workspace shell (not in grip scoreboard weights). */
   fdm: { ok: boolean; errors: string[] }
+  /** Fast FDM support-paint API + workspace wiring (no legacy slice). */
+  fdmPaint: { ok: boolean; errors: string[] }
+  laser: { ok: boolean; errors: string[] }
+  sla: { ok: boolean; errors: string[] }
   deviceBridge: { ok: boolean; errors: string[] }
   bootstrap: { ok: boolean; errors: string[] }
   allOk: boolean
@@ -38,6 +45,9 @@ export async function evaluateMigrationProductGates(): Promise<MigrationProductG
   const backend = evaluateBackendMigrationComplete()
   const other = evaluateOtherMigrationComplete()
   const fdm = evaluateFdmMigrationComplete()
+  const fdmPaint = evaluateFdmSupportPaintMigrationComplete()
+  const laser = evaluateLaserMigrationComplete()
+  const sla = await evaluateSlaMigrationComplete()
   const deviceBridge = evaluateDeviceBridgeMigrationComplete()
   const bootstrap = evaluateBootstrapMigrationComplete()
 
@@ -55,8 +65,18 @@ export async function evaluateMigrationProductGates(): Promise<MigrationProductG
     scoreboard: computeMigrationProgressTotals(),
     gates,
     fdm: { ok: fdm.ok, errors: fdm.errors },
+    fdmPaint: { ok: fdmPaint.ok, errors: fdmPaint.errors },
+    laser: { ok: laser.ok, errors: laser.errors },
+    sla: { ok: sla.ok, errors: sla.errors },
     deviceBridge: { ok: deviceBridge.ok, errors: deviceBridge.errors },
     bootstrap: { ok: bootstrap.ok, errors: bootstrap.errors },
-    allOk: gates.every((g) => g.ok) && fdm.ok && deviceBridge.ok && bootstrap.ok,
+    allOk:
+      gates.every((g) => g.ok) &&
+      fdm.ok &&
+      fdmPaint.ok &&
+      laser.ok &&
+      sla.ok &&
+      deviceBridge.ok &&
+      bootstrap.ok,
   }
 }

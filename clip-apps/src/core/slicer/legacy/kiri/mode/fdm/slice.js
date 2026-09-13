@@ -852,8 +852,18 @@ export function fdm_slice(settings, widget, onupdate, ondone) {
             }
         }
 
-        // auto support generation
-        if (!isBelt && !isSynth && supportDensity && process.sliceSupportEnable) {
+        // manual paint supports (Kiri processSupports paint path — simplified for vendored slice)
+        const paintPts = widget.anno?.paint
+        const supportType = process.sliceSupportType || (process.sliceSupportEnable ? 'automatic' : 'disabled')
+        if (
+          !isBelt &&
+          !isSynth &&
+          supportType === 'manual' &&
+          Array.isArray(paintPts) &&
+          paintPts.length
+        ) {
+          applyManualPaintSupports(slices, paintPts, process)
+        } else if (!isBelt && !isSynth && supportDensity && process.sliceSupportEnable && supportType !== 'disabled') {
             doShadow(slices);
             profileStart("support");
             let promises = [];
@@ -868,7 +878,7 @@ export function fdm_slice(settings, widget, onupdate, ondone) {
 
         // fill all supports (auto and manual)
         // if (!isBelt && supportDensity) {
-        if (supportDensity) {
+        if (supportDensity || (supportType === 'manual' && Array.isArray(paintPts) && paintPts.length)) {
             profileStart("support-fill");
             let promises = false && isConcurrent ? [] : undefined;
             forSlices(0.8, promises ? 0.88 : 0.9, slice => {
@@ -1542,6 +1552,38 @@ function doFillArea(fillQ, polys, angle, spacing, output, minLen, maxLen) {
 /**
  * calculate external overhangs requiring support
  */
+/**
+ * Manual support paint → per-slice support pillars (Kiri anno.paint spheres).
+ * Paint points: { point: {x,y,z}, radius }.
+ */
+function applyManualPaintSupports(slices, paint, process) {
+    const hpi = Math.PI / 2;
+    const size = Math.max(0.5, Number(process.sliceSupportSize) || 4);
+    const stack = (slices || []).slice().sort((a, b) => a.z - b.z);
+    for (const slice of stack) {
+        if (!slice || slice.up == null) continue;
+        const pillars = [];
+        for (const rec of paint) {
+            if (!rec?.point) continue;
+            const point = rec.point;
+            let radius = Number(rec.radius) > 0 ? Number(rec.radius) : size / 2;
+            const dz = Math.abs(slice.z - point.z);
+            if (dz >= radius) continue;
+            radius = (Math.acos(dz / radius) / hpi) * radius;
+            const cx = point.x;
+            const cy = point.y;
+            pillars.push(newPolygon().centerCircle({ x: cx, y: cy, z: slice.z }, Math.max(0.2, radius), 12));
+        }
+        if (!pillars.length) continue;
+        const unioned = POLY.union(pillars, null, true, { wasm: false }) || pillars;
+        slice.supports = slice.supports || [];
+        slice.supports.appendAll(unioned);
+        for (const poly of unioned) {
+            if (poly) poly.depth = 1;
+        }
+    }
+}
+
 async function doSupport(slice, proc, shadow, opt = {}) {
     let { minions } = self.kiri_worker,
         maxBridge = proc.sliceSupportSpan || 5,

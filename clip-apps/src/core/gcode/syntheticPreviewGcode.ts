@@ -53,6 +53,8 @@ export function buildSyntheticPreviewGcode(opts: BuildSyntheticPreviewGcodeOptio
   for (let gi = 0; gi < groups.length && gi < maxGroups; gi += 1) {
     const group = groups[gi]!
     if (group.comment) lines.push(`; ${group.comment}`)
+    // New feature/path → lift/reposition with G0 (do not stitch G1 across paths).
+    state.started = false
     for (const p of group.points) {
       if (count >= maxPoints) break
       emitMotion(lines, state, p, firstMove)

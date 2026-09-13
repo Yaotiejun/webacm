@@ -232,8 +232,87 @@
             :disabled="!connected || !currentJobContent || store.sending"
             @click="onSendCurrentJob"
           >
-            发送当前 G-code（逐行，占位）
+            发送当前 G-code（逐行 ack）
           </el-button>
+          <el-button
+            size="small"
+            type="primary"
+            :disabled="!connected || !currentJobContent || store.sending || store.sdUploading"
+            :loading="store.sdUploading"
+            @click="onUploadAndPlay"
+          >
+            上传 SD 并播放
+          </el-button>
+          <div v-if="store.sdUploading || store.sdUploadPath" class="hint" style="margin-top: 4px">
+            SD:
+            <template v-if="store.sdUploading">
+              {{ store.sdUploadPath }} · block {{ store.sdUploadBlock }}/{{ store.sdUploadTotal || '?' }}
+            </template>
+            <template v-else-if="store.sdUploadPath">
+              {{ store.sdUploadPath }}
+              <template v-if="store.sdLastMd5"> · md5 {{ store.sdLastMd5.slice(0, 8) }}…</template>
+            </template>
+          </div>
+
+          <el-divider content-position="left">SD 文件</el-divider>
+          <div class="actions" style="flex-wrap: wrap; gap: 6px">
+            <el-button
+              size="small"
+              plain
+              :disabled="!connected || store.sdListing || store.sdUploading"
+              :loading="store.sdListing"
+              @click="onRefreshSd"
+            >
+              刷新 SD
+            </el-button>
+            <el-button
+              size="small"
+              plain
+              :disabled="!connected || store.sdListing || store.sdPath === '/'"
+              @click="onSdParent"
+            >
+              上级
+            </el-button>
+            <el-button
+              size="small"
+              type="success"
+              plain
+              :disabled="!connected || !store.sdSelectedPath || store.sdUploading"
+              @click="onPlaySd"
+            >
+              播放选中
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="!connected || !store.sdSelectedPath || store.sdUploading"
+              @click="onRemoveSd"
+            >
+              删除选中
+            </el-button>
+          </div>
+          <div class="hint" style="margin-top: 4px">路径：{{ store.sdPath }}</div>
+          <el-table
+            :data="store.sdList"
+            size="small"
+            border
+            height="160"
+            style="margin-top: 6px"
+            highlight-current-row
+            @row-click="onSdRowClick"
+          >
+            <el-table-column label="名称" min-width="140">
+              <template #default="scope">
+                <span :class="{ 'is-dir': isSdDir(scope.row.name) }">{{ scope.row.name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="size" label="大小" width="72" />
+          </el-table>
+          <div v-if="store.sdSelectedPath" class="hint" style="margin-top: 4px">
+            选中：{{ store.sdSelectedPath }}
+          </div>
+
           <el-button
             size="small"
             plain
@@ -268,7 +347,7 @@
 
         <el-divider />
 
-        <div class="pane-title" style="padding: 8px 0; border: none">调试发送（占位）</div>
+        <div class="pane-title" style="padding: 8px 0; border: none">调试发送</div>
         <div class="pane-body" style="padding-top: 4px">
           <div style="display: flex; gap: 8px; align-items: center">
             <el-input
@@ -288,7 +367,7 @@
               <el-option v-for="h in debugHistory" :key="h" :label="h" :value="h" />
             </el-select>
           </div>
-          <div style="display: flex; gap: 8px; margin-top: 8px">
+          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
             <el-button size="small" type="primary" plain :disabled="!canSendDebugLine" @click="onSendDebugLine">
               发送一行
             </el-button>
@@ -302,13 +381,45 @@
             >
               {{ macro.label }}
             </el-button>
-            <span class="hint">需要已连接且 WebSocket OPEN。</span>
           </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap">
+            <span class="hint">进给%:</span>
+            <el-slider
+              v-model="feedOverridePct"
+              :min="10"
+              :max="200"
+              :step="5"
+              style="width: 120px; margin: 0 8px"
+              :disabled="!connected"
+              @change="onFeedOverride"
+            />
+            <span class="hint">主轴%:</span>
+            <el-slider
+              v-model="spinOverridePct"
+              :min="10"
+              :max="200"
+              :step="5"
+              style="width: 120px; margin: 0 8px"
+              :disabled="!connected"
+              @change="onSpinOverride"
+            />
+            <span class="hint">激光%:</span>
+            <el-slider
+              v-model="laserOverridePct"
+              :min="0"
+              :max="200"
+              :step="5"
+              style="width: 120px; margin: 0 8px"
+              :disabled="!connected"
+              @change="onLaserOverride"
+            />
+          </div>
+          <div class="hint" style="margin-top: 4px">需要已连接且 WebSocket OPEN。宏对标 carve-control。</div>
         </div>
 
         <el-divider />
 
-        <div class="pane-title" style="padding: 8px 0; border: none">消息日志（占位）</div>
+        <div class="pane-title" style="padding: 8px 0; border: none">消息日志</div>
         <div class="pane-body" style="padding-top: 4px; max-height: 240px; overflow: auto">
           <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center">
             <span class="hint">方向:</span>
@@ -367,59 +478,169 @@
 
         <el-divider />
 
-        <div class="pane-title" style="padding: 8px 0; border: none">G-code 预览（占位）</div>
+        <div class="pane-title" style="padding: 8px 0; border: none">G-code 文本</div>
         <div class="pane-body" style="padding-top: 4px; max-height: 200px; overflow: auto">
-          <pre class="gcode-preview">{{
-            (currentJobContent || '')
-              .split('\n')
-              .slice(0, 200)
-              .join('\n')
-          }}</pre>
+          <div v-if="currentJobContent" class="hint" style="margin-bottom: 4px">
+            共 {{ gcodeLineCount }} 行
+            <template v-if="machineState.playLine != null">
+              · 机床播放行 {{ machineState.playLine }}
+            </template>
+            · 下方显示前 400 行（完整路径见中央 3D 预览）
+          </div>
+          <pre class="gcode-preview">{{ gcodeTextPreview }}</pre>
           <div v-if="!currentJobContent" class="hint">未选择作业或作业未包含内容。</div>
         </div>
 
         <el-divider />
 
-        <div class="pane-title" style="padding: 8px 0; border: none">手动操作（占位）</div>
+        <div class="pane-title" style="padding: 8px 0; border: none">手动操作 (JOG)</div>
         <div class="pane-body" style="padding-top: 4px">
           <div class="hint" style="margin-bottom: 8px">
-            简单 JOG：相对模式 G91 / G0 / 再 G90（速度/限位保护由控制器负责）。
+            相对 JOG：G91 → G0/G1 → G90。A 轴步长默认角度。对标 carve-control。
           </div>
 
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-            <span class="hint">步长 (mm):</span>
-            <el-select v-model="jogStep" size="small" style="width: 100px">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap">
+            <span class="hint">XY 步长:</span>
+            <el-select v-model="jogStepXy" size="small" style="width: 90px">
               <el-option :value="0.1" label="0.1" />
               <el-option :value="1" label="1" />
               <el-option :value="10" label="10" />
             </el-select>
-            <span class="hint" style="margin-left: 12px">进给 (可选):</span>
+            <span class="hint">Z:</span>
+            <el-select v-model="jogStepZ" size="small" style="width: 90px">
+              <el-option :value="0.1" label="0.1" />
+              <el-option :value="1" label="1" />
+              <el-option :value="10" label="10" />
+            </el-select>
+            <span class="hint">A°:</span>
+            <el-select v-model="jogStepA" size="small" style="width: 90px">
+              <el-option :value="1" label="1" />
+              <el-option :value="5" label="5" />
+              <el-option :value="45" label="45" />
+              <el-option :value="90" label="90" />
+            </el-select>
+            <span class="hint">进给:</span>
             <el-input-number
               v-model="jogFeed"
               :min="0"
               :step="100"
               size="small"
-              style="width: 140px"
-              placeholder="默认 G0 速度"
+              style="width: 120px"
+              placeholder="G0"
             />
           </div>
 
           <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-width: 220px">
             <span />
-            <el-button size="small" :disabled="!connected" @click="onJog('Y+', jogStep)">Y+</el-button>
+            <el-button size="small" :disabled="!connected" @click="onJog('Y+', jogStepXy)">Y+</el-button>
             <span />
 
-            <el-button size="small" :disabled="!connected" @click="onJog('X-', jogStep)">X-</el-button>
+            <el-button size="small" :disabled="!connected" @click="onJog('X-', jogStepXy)">X-</el-button>
             <span />
-            <el-button size="small" :disabled="!connected" @click="onJog('X+', jogStep)">X+</el-button>
+            <el-button size="small" :disabled="!connected" @click="onJog('X+', jogStepXy)">X+</el-button>
 
             <span />
-            <el-button size="small" :disabled="!connected" @click="onJog('Y-', jogStep)">Y-</el-button>
+            <el-button size="small" :disabled="!connected" @click="onJog('Y-', jogStepXy)">Y-</el-button>
             <span />
 
-            <el-button size="small" :disabled="!connected" @click="onJog('Z+', jogStep)">Z+</el-button>
+            <el-button size="small" :disabled="!connected" @click="onJog('Z+', jogStepZ)">Z+</el-button>
             <span />
-            <el-button size="small" :disabled="!connected" @click="onJog('Z-', jogStep)">Z-</el-button>
+            <el-button size="small" :disabled="!connected" @click="onJog('Z-', jogStepZ)">Z-</el-button>
+
+            <el-button size="small" :disabled="!connected" @click="onJog('A-', jogStepA)">A-</el-button>
+            <span />
+            <el-button size="small" :disabled="!connected" @click="onJog('A+', jogStepA)">A+</el-button>
+          </div>
+
+          <div style="display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap">
+            <span class="hint">WCS:</span>
+            <el-button
+              v-for="z in wcsZeroMacros"
+              :key="z.id"
+              size="small"
+              plain
+              :disabled="!connected"
+              @click="onWcsZero(z.id)"
+            >
+              {{ z.label }}
+            </el-button>
+            <el-button size="small" plain :disabled="!connected" @click="onSetOriginFromMpos">
+              设原点
+            </el-button>
+          </div>
+        </div>
+
+        <el-divider />
+
+        <div class="pane-title" style="padding: 8px 0; border: none">探针 / 调平 (M495)</div>
+        <div class="pane-body" style="padding-top: 4px">
+          <div class="hint" style="margin-bottom: 8px">
+            对标 carve-control：三轴 Z 探测须同时带 O+F；网格调平用 A/B/I/J/H。
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+              <span class="hint">模式</span>
+              <el-select v-model="probeMode" size="small" style="width: 140px">
+                <el-option value="z" label="Z 探测" />
+                <el-option value="grid" label="网格调平" />
+                <el-option value="axis4" label="四轴 Z" />
+                <el-option value="none" label="仅定位 XY" />
+              </el-select>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+              <span class="hint">起点</span>
+              <el-input-number v-model="probeStartX" size="small" :step="1" style="width: 100px" />
+              <el-input-number v-model="probeStartY" size="small" :step="1" style="width: 100px" />
+            </div>
+            <div
+              v-if="probeMode === 'z' || probeMode === 'grid'"
+              style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap"
+            >
+              <span class="hint">O/F</span>
+              <el-input-number v-model="probeOffsetO" size="small" :step="1" style="width: 100px" />
+              <el-input-number v-model="probeOffsetF" size="small" :step="1" style="width: 100px" />
+            </div>
+            <div
+              v-if="probeMode === 'z' || probeMode === 'grid'"
+              style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap"
+            >
+              <span class="hint">边距 C/D</span>
+              <el-input-number v-model="probeMarginX" size="small" :min="0" :step="1" style="width: 100px" />
+              <el-input-number v-model="probeMarginY" size="small" :min="0" :step="1" style="width: 100px" />
+            </div>
+            <template v-if="probeMode === 'grid'">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+                <span class="hint">网格 A×B</span>
+                <el-input-number v-model="probeGridA" size="small" :min="1" :step="1" style="width: 100px" />
+                <el-input-number v-model="probeGridB" size="small" :min="1" :step="1" style="width: 100px" />
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+                <span class="hint">点数 I×J</span>
+                <el-input-number v-model="probeGridI" size="small" :min="2" :step="1" style="width: 100px" />
+                <el-input-number v-model="probeGridJ" size="small" :min="2" :step="1" style="width: 100px" />
+                <span class="hint">抬升 H</span>
+                <el-input-number v-model="probeClearanceH" size="small" :min="0" :step="0.5" style="width: 100px" />
+              </div>
+            </template>
+            <div v-if="probeMode === 'axis4'" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+              <span class="hint">O (无 F)</span>
+              <el-input-number v-model="probeOffsetO" size="small" :step="1" style="width: 100px" />
+            </div>
+            <el-input :model-value="probePreviewLine" size="small" readonly>
+              <template #prepend>预览</template>
+            </el-input>
+            <div v-if="probeWarnings.length" class="hint" style="color: #e6a23c">
+              {{ probeWarnings.join('；') }}
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap">
+              <el-button type="primary" size="small" :disabled="!connected" @click="onRunProbe">
+                发送 M495
+              </el-button>
+              <el-button size="small" :disabled="!connected" plain @click="onBufferProbe">
+                buffer 后播放
+              </el-button>
+              <el-button size="small" plain @click="onCopyProbeLine">复制指令</el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -440,9 +661,19 @@ import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCarveraStore } from '@/stores/useCarveraStore'
 import type { CarveraJobRecord } from '@/api/jobs'
+import { isCarveraSdDirName } from '@/core/devices/carveraSdBrowser'
 import { useExportActions } from '@/composables/useExportActions'
 import { gcodeForClipboard } from '@/core/gcode/gcodeForClipboard'
-import { DEVICE_GCODE_MACROS } from '@/core/devices/deviceGcodeMacros'
+import {
+  CARVERA_GCODE_MACROS,
+  CARVERA_WCS_ZERO_MACROS,
+} from '@/core/devices/carveraGcodeMacros'
+import {
+  bufferCarveraM495,
+  buildCarveraM495,
+  validateCarveraM495Options,
+  type CarveraProbeMode,
+} from '@/core/devices/carveraProbeM495'
 import { defaultDeviceBridgeEndpoint } from '@/core/devices/deviceEndpointReset'
 import { useFileImportActions } from '@/composables/useFileImportActions'
 import GcodePreviewPanel from '@/components/gcode/GcodePreviewPanel.vue'
@@ -572,13 +803,90 @@ function writeDebugHistory(list: string[]) {
   localStorage.setItem(LS_DEBUG_HISTORY, JSON.stringify(list.slice(0, 20)))
 }
 
-const deviceMacros = DEVICE_GCODE_MACROS
+const deviceMacros = CARVERA_GCODE_MACROS
+const wcsZeroMacros = CARVERA_WCS_ZERO_MACROS
+
+const probeMode = ref<CarveraProbeMode>('z')
+const probeStartX = ref(0)
+const probeStartY = ref(0)
+const probeOffsetO = ref(0)
+const probeOffsetF = ref(0)
+const probeMarginX = ref(0)
+const probeMarginY = ref(0)
+const probeGridA = ref(100)
+const probeGridB = ref(80)
+const probeGridI = ref(3)
+const probeGridJ = ref(3)
+const probeClearanceH = ref(3)
+
+const probeOptions = computed(() => ({
+  mode: probeMode.value,
+  startX: probeStartX.value,
+  startY: probeStartY.value,
+  offsetO: probeOffsetO.value,
+  offsetF: probeOffsetF.value,
+  marginX: probeMarginX.value > 0 ? probeMarginX.value : undefined,
+  marginY: probeMarginY.value > 0 ? probeMarginY.value : undefined,
+  gridA: probeGridA.value,
+  gridB: probeGridB.value,
+  gridI: probeGridI.value,
+  gridJ: probeGridJ.value,
+  clearanceH: probeClearanceH.value,
+}))
+
+const probePreviewLine = computed(() => buildCarveraM495(probeOptions.value))
+const probeWarnings = computed(() => validateCarveraM495Options(probeOptions.value))
+
+function onRunProbe() {
+  if (!connected.value) {
+    ElMessage.warning('尚未连接设备')
+    return
+  }
+  const line = probePreviewLine.value
+  store.basicCommandSend(line)
+  pushDebugHistory(line)
+  ElMessage.success(`已发送 ${line}`)
+}
+
+function onBufferProbe() {
+  if (!connected.value) {
+    ElMessage.warning('尚未连接设备')
+    return
+  }
+  try {
+    const buffered = bufferCarveraM495(probePreviewLine.value)
+    store.basicCommandSend(buffered)
+    pushDebugHistory(buffered)
+    ElMessage.success(`已发送 ${buffered}`)
+  } catch (e) {
+    ElMessage.error((e as Error).message || 'buffer 失败')
+  }
+}
+
+async function onCopyProbeLine() {
+  await copyText(probePreviewLine.value, '已复制 M495')
+}
+
 const debugLine = ref('')
 const debugHistory = ref<string[]>(readDebugHistory())
 const canSendDebugLine = computed(() => {
   const s = debugLine.value.trim()
   return connected.value && s.length > 0 && store.isSocketOpen()
 })
+
+const gcodeLineCount = computed(() => {
+  if (!currentJobContent.value) return 0
+  return currentJobContent.value.split(/\r?\n/).length
+})
+
+const gcodeTextPreview = computed(() => {
+  if (!currentJobContent.value) return ''
+  return currentJobContent.value.split(/\r?\n/).slice(0, 400).join('\n')
+})
+
+const feedOverridePct = ref(100)
+const spinOverridePct = ref(100)
+const laserOverridePct = ref(100)
 
 function pushDebugHistory(line: string) {
   const trimmed = line.trim()
@@ -592,8 +900,25 @@ function onSelectDebugHistory(v: string) {
   debugLine.value = v
 }
 
-const jogStep = ref(1)
+const LS_JOG = 'ws-carvera-jog'
+function readJogPrefs() {
+  try {
+    const raw = localStorage.getItem(LS_JOG)
+    if (!raw) return null
+    return JSON.parse(raw) as { xy?: number; z?: number; a?: number }
+  } catch {
+    return null
+  }
+}
+const jogPrefs = readJogPrefs()
+const jogStepXy = ref(jogPrefs?.xy ?? 1)
+const jogStepZ = ref(jogPrefs?.z ?? 1)
+const jogStepA = ref(jogPrefs?.a ?? 90)
 const jogFeed = ref<number | null>(null)
+
+watch([jogStepXy, jogStepZ, jogStepA], ([xy, z, a]) => {
+  localStorage.setItem(LS_JOG, JSON.stringify({ xy, z, a }))
+})
 
 const preferMachineTool = computed(() =>
   machinePositionLooksLive(connected.value, {
@@ -608,7 +933,7 @@ const toolPosition = useGcodeToolPositionWithMachineFallback(
   preferMachineTool,
 )
 const stemColor = computed(() => (machineState.value.spindleOn ? 0x67c23a : 0xe6a23c))
-type JogDir = 'X+' | 'X-' | 'Y+' | 'Y-' | 'Z+' | 'Z-'
+type JogDir = 'X+' | 'X-' | 'Y+' | 'Y-' | 'Z+' | 'Z-' | 'A+' | 'A-'
 
 function onJog(dir: JogDir, step: number | undefined) {
   if (!connected.value) {
@@ -618,15 +943,50 @@ function onJog(dir: JogDir, step: number | undefined) {
   const s = Number(step ?? 0)
   if (!s || !Number.isFinite(s)) return
 
-  let axis: 'X' | 'Y' | 'Z' = 'X'
+  let axis: 'X' | 'Y' | 'Z' | 'A' = 'X'
   let delta = s
 
   if (dir.startsWith('Y')) axis = 'Y'
-  if (dir.startsWith('Z')) axis = 'Z'
+  else if (dir.startsWith('Z')) axis = 'Z'
+  else if (dir.startsWith('A')) axis = 'A'
   if (dir.endsWith('-')) delta = -s
 
   const feed = jogFeed.value ?? undefined
   store.jogRelative(axis, delta, feed)
+}
+
+function onWcsZero(id: string) {
+  if (!connected.value) {
+    ElMessage.warning('尚未连接设备')
+    return
+  }
+  const axis = id.replace('-zero', '').toUpperCase() as 'X' | 'Y' | 'Z' | 'A'
+  store.setWcsZero(axis)
+  ElMessage.success(`已置零 ${axis}`)
+}
+
+function onSetOriginFromMpos() {
+  if (!connected.value) {
+    ElMessage.warning('尚未连接设备')
+    return
+  }
+  store.setOriginFromMpos()
+  ElMessage.success('已按 MPos 设置原点')
+}
+
+function onFeedOverride() {
+  if (!connected.value) return
+  store.setFeedOverridePct(Number(feedOverridePct.value))
+}
+
+function onSpinOverride() {
+  if (!connected.value) return
+  store.setSpinOverridePct(Number(spinOverridePct.value))
+}
+
+function onLaserOverride() {
+  if (!connected.value) return
+  store.setLaserOverridePct(Number(laserOverridePct.value))
 }
 
 function onSendDebugLine() {
@@ -755,6 +1115,7 @@ async function onConnect() {
   await store.connect()
   if (connected.value) {
     ElMessage.success(`已连接到 Carvera（${endpoint.value}）`)
+    void store.refreshSdList('/sd/gcodes').catch(() => {})
   } else {
     ElMessage.error('连接失败')
   }
@@ -791,7 +1152,86 @@ function onSendCurrentJob() {
 
   const job = currentJob.value
   void store.sendJobLines(currentJobContent.value, 20)
-  ElMessage.success(`开始发送作业：${job.name}（逐行，占位）`)
+  ElMessage.success(`开始发送作业：${job.name}（ack 门控）`)
+}
+
+async function onUploadAndPlay() {
+  if (!connected.value) {
+    ElMessage.warning('尚未连接设备')
+    return
+  }
+  if (!currentJob.value || !currentJobContent.value) {
+    ElMessage.warning('当前没有可发送的 G-code 作业')
+    return
+  }
+  if (!store.isSocketOpen()) {
+    ElMessage.warning('WebSocket 未就绪')
+    return
+  }
+  const job = currentJob.value
+  try {
+    await store.uploadAndPlayJob(currentJobContent.value, job.name, true)
+    ElMessage.success(`已上传并播放：${job.name}`)
+  } catch (e: any) {
+    ElMessage.error(`SD 上传/播放失败：${e?.message ?? String(e)}`)
+  }
+}
+
+function isSdDir(name: string) {
+  return isCarveraSdDirName(name)
+}
+
+async function onRefreshSd() {
+  try {
+    await store.refreshSdList()
+    ElMessage.success('已刷新 SD 列表')
+  } catch (e: any) {
+    ElMessage.error(`SD 列表失败：${e?.message ?? String(e)}`)
+  }
+}
+
+async function onSdParent() {
+  try {
+    await store.goSdParent()
+  } catch (e: any) {
+    ElMessage.error(`SD 上级失败：${e?.message ?? String(e)}`)
+  }
+}
+
+async function onSdRowClick(row: { name: string; size: string }) {
+  try {
+    await store.openSdEntry(row)
+  } catch (e: any) {
+    ElMessage.error(`SD 打开失败：${e?.message ?? String(e)}`)
+  }
+}
+
+async function onPlaySd() {
+  try {
+    await store.playSelectedSd()
+    ElMessage.success('已请求 SD 播放')
+  } catch (e: any) {
+    ElMessage.error(`SD 播放失败：${e?.message ?? String(e)}`)
+  }
+}
+
+async function onRemoveSd() {
+  if (!store.sdSelectedPath) return
+  try {
+    await ElMessageBox.confirm(`删除 SD 文件？\n${store.sdSelectedPath}`, '删除 SD', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await store.removeSelectedSd()
+    ElMessage.success('已删除 SD 文件')
+  } catch (e: any) {
+    ElMessage.error(`SD 删除失败：${e?.message ?? String(e)}`)
+  }
 }
 
 function onPauseSend() {

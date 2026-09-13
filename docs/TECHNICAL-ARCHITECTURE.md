@@ -367,7 +367,7 @@ flowchart TB
   subgraph gates [离线门 migration gate]
     MG[npm run test:migration<br/>~1141 tests]
     PG[migrationProductGates<br/>7 域 + FDM + bridge + bootstrap]
-    OP[migration:ordered:offline<br/>4 phases 夹具]
+    OP[migration:ordered:offline<br/>6 phases 夹具]
   end
 
   subgraph live [Live / Soak 非 gate]

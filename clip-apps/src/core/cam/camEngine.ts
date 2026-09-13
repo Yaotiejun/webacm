@@ -87,9 +87,19 @@ function buildKiriCamSettings(profile: CamProfile, geometry: CamJobInputGeometry
       dark: false,
       alignTop: false,
       devel: false,
+      // Kiri: healMesh / threaded — camExpertFast skips overhang shadow (unsafe)
+      healMesh: true,
+      threaded: false,
     },
     stock,
-    origin: { x: 0, y: 0, z: 0 },
+    // Kiri platform origin from process camOrigin*
+    origin: {
+      x: Number(process.camOriginOffX) || 0,
+      y: Number(process.camOriginOffY) || 0,
+      z: Number(process.camOriginOffZ) || 0,
+      center: Boolean(process.camOriginCenter),
+      top: Boolean(process.camOriginTop),
+    },
     bounds: {
       min: { x: geometry.bbox.minX, y: geometry.bbox.minY, z: geometry.bbox.minZ },
       max: { x: geometry.bbox.maxX, y: geometry.bbox.maxY, z: geometry.bbox.maxZ },

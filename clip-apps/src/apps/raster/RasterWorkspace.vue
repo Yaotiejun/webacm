@@ -39,6 +39,10 @@
             <el-descriptions-item v-if="mode === 'radial'" label="角度步距 (deg)">
               <el-input-number v-model="rotationStep" :min="0.1" :step="0.5" size="small" />
             </el-descriptions-item>
+            <el-descriptions-item v-if="mode === 'radial'" label="radial V3">
+              <el-switch v-model="radialV3" size="small" />
+              <span class="hint" style="margin-left: 6px">lathe 向旋转栅格（grip V3）</span>
+            </el-descriptions-item>
             <el-descriptions-item label="X 步距 (grid)">
               <el-input-number v-model="xStep" :min="1" :step="1" size="small" />
             </el-descriptions-item>
@@ -87,6 +91,7 @@
           <div class="hint" style="margin-top: 4px; font-size: 12px">{{ gripRadialHint }}</div>
           <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap">
             <el-button size="small" plain @click="onApplyGripRadialBaseline">grip radial 基线</el-button>
+            <el-button size="small" plain @click="onApplyRadialV3Lathe">radial V3（lathe）</el-button>
             <el-button size="small" plain :loading="gripStlLoading" @click="onLoadGripBaselineStl">grip 基线 STL</el-button>
             <el-button size="small" plain :disabled="!canRun || running" @click="onGripRadialBaselineFullRun">
               radial 基线一键
@@ -197,14 +202,23 @@
     <el-container class="raster-center">
       <el-main class="raster-main raster-main-center">
         <div class="pane-title">结果预览</div>
-        <div v-if="!result" class="pane-body hint">尚未生成刀路。</div>
+        <div v-if="!result && !terrainTriangles && !toolTriangles" class="pane-body hint">
+          尚未导入 STL。导入地形/刀具后显示 3D 模型；生成刀路后叠加轨迹。
+        </div>
         <GcodePreviewPanel
+          ref="rasterPreviewRef"
           layout="compact"
           kind="raster"
           :job-gcode="rasterViewportGcode"
           :tool-position="rasterViewportTool"
           :stem-color="rasterViewportStem"
-          :toolbar-hint="result ? '3D 折线：由 raster paths 合成 G0/G1（共用 Carvera/FDM 视口基建）。' : '生成刀路后显示 3D 折线与下方 2D 预览。'"
+          :toolbar-hint="
+            result
+              ? '3D 折线：由 raster paths 合成 G0/G1（共用 Carvera/FDM 视口基建）。'
+              : terrainTriangles || toolTriangles
+                ? '已显示地形/刀具网格（平台 arrange，与 CAM/SLA 相同）。生成刀路后叠加 3D 折线。'
+                : '导入 STL 后显示 3D 模型；生成刀路后显示折线与下方 2D 预览。'
+          "
         />
         <div v-if="result" class="pane-body raster-2d-block">
             <div class="hint" style="margin-bottom: 6px">2D 预览（XY 轨迹，颜色映射 Z）。</div>
@@ -223,7 +237,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import type { Mesh } from 'three'
 import { useRasterStore } from '@/stores/useRasterStore'
+import {
+  buildRasterTerrainArrangeMesh,
+  buildRasterToolArrangeMesh,
+  disposeRasterObject3D,
+  seatRasterVertices,
+  setRasterArrangeMeshGhost,
+} from '@/core/raster/rasterArrangeMesh'
 import { useCarveraStore } from '@/stores/useCarveraStore'
 import { useGridBotStore } from '@/stores/useGridBotStore'
 import { createCarveraJobFromBridgeGcode, createGridBotJobFromBridgeGcode } from '@/core/jobs/bridgeGcodeJob'
@@ -282,6 +304,10 @@ const rotationStep = computed({
   get: () => store.config.rotationStep,
   set: (v: number) => store.setConfig({ rotationStep: v }),
 })
+const radialV3 = computed({
+  get: () => Boolean(store.config.radialV3),
+  set: (v: boolean) => store.setConfig({ radialV3: v }),
+})
 const mode = computed({
   get: () => store.config.mode,
   set: (v: RasterMode) => store.setMode(v),
@@ -317,6 +343,62 @@ const rasterViewportGcode = computed(() => {
 const rasterViewportTool = ref({ x: 0, y: 0, z: 0 })
 useGcodePathEndToolPosition(rasterViewportGcode, rasterViewportTool)
 const rasterViewportStem = ref(0x13c2c2)
+
+const rasterPreviewRef = ref<InstanceType<typeof GcodePreviewPanel> | null>(null)
+let terrainArrangeMesh: Mesh | null = null
+let toolArrangeMesh: Mesh | null = null
+
+function clearRasterArrangeMeshes() {
+  if (terrainArrangeMesh) {
+    terrainArrangeMesh.parent?.remove(terrainArrangeMesh)
+    disposeRasterObject3D(terrainArrangeMesh)
+    terrainArrangeMesh = null
+  }
+  if (toolArrangeMesh) {
+    toolArrangeMesh.parent?.remove(toolArrangeMesh)
+    disposeRasterObject3D(toolArrangeMesh)
+    toolArrangeMesh = null
+  }
+}
+
+/** Show imported terrain/tool STL on the shared Gcode preview platform (CAM/SLA arrange pattern). */
+function showRasterArrangeMeshes() {
+  clearRasterArrangeMeshes()
+  const terrain = terrainTriangles.value
+  const tool = toolTriangles.value
+  if (!terrain?.length && !tool?.length) return
+  const tryAdd = (attempt: number) => {
+    const group = rasterPreviewRef.value?.getOrCreateAnimateStockGroup?.()
+    if (!group) {
+      if (attempt < 120) requestAnimationFrame(() => tryAdd(attempt + 1))
+      else ElMessage.warning('3D 视口未就绪，请稍后重新导入 STL')
+      return
+    }
+    while (group.children.length) {
+      const c = group.children.pop()!
+      group.remove(c)
+      disposeRasterObject3D(c)
+    }
+    try {
+      const terrainSeat = terrain?.length ? seatRasterVertices(terrain) : null
+      if (terrain?.length && terrainSeat) {
+        terrainArrangeMesh = buildRasterTerrainArrangeMesh(terrain)
+        setRasterArrangeMeshGhost(terrainArrangeMesh, false)
+        group.add(terrainArrangeMesh)
+      }
+      if (tool?.length) {
+        toolArrangeMesh = buildRasterToolArrangeMesh(tool, terrainSeat)
+        setRasterArrangeMeshGhost(toolArrangeMesh, false)
+        group.add(toolArrangeMesh)
+      }
+      rasterPreviewRef.value?.fitCameraToAnimateStock?.(2.4)
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('无法显示 Raster STL 网格')
+    }
+  }
+  tryAdd(0)
+}
 
 function onLoadFromRecent(job: RasterRecentJob) {
   store.setConfig({ ...job.input.config })
@@ -588,6 +670,18 @@ function onApplyGripRadialBaseline() {
   ElMessage.success('已应用 grip radial 基线（resolution 0.1, 1°）')
 }
 
+function onApplyRadialV3Lathe() {
+  store.setConfig(
+    rasterConfigWithGripPreset(GRIP_RASTER_RADIAL_BASELINE, {
+      radialV3: true,
+      rotationStep: 2,
+      xStep: 2,
+      yStep: 1,
+    }),
+  )
+  ElMessage.success('已启用 radial V3（grip lathe 向管道；V4 真车床暂缓）')
+}
+
 async function onLoadGripBaselineStl() {
   gripStlLoading.value = true
   try {
@@ -595,6 +689,7 @@ async function onLoadGripBaselineStl() {
     terrainTriangles.value = pair.terrainTriangles
     toolTriangles.value = pair.toolTriangles
     store.result = null
+    void nextTick(() => showRasterArrangeMeshes())
     const msg = pair.meshMatch
       ? `已加载 grip 基线 STL（${pair.terrainVertexCount}/${pair.toolVertexCount} 顶点，匹配）`
       : `已加载 STL（地形 ${pair.terrainVertexCount} / 刀具 ${pair.toolVertexCount} 顶点，与 grip 基线不完全一致）`
@@ -671,6 +766,7 @@ async function onTerrainFileChange(e: Event) {
   try {
     terrainTriangles.value = await parseStlToTriangles(file)
     store.result = null
+    void nextTick(() => showRasterArrangeMeshes())
     ElMessage.success(`已导入地形 STL：${file.name}（顶点 ${terrainVertexCount.value}）`)
   } catch (err: any) {
     ElMessage.error(`地形 STL 解析失败：${err?.message ?? String(err)}`)
@@ -686,6 +782,7 @@ async function onToolFileChange(e: Event) {
   try {
     toolTriangles.value = await parseStlToTriangles(file)
     store.result = null
+    void nextTick(() => showRasterArrangeMeshes())
     ElMessage.success(`已导入刀具 STL：${file.name}（顶点 ${toolVertexCount.value}）`)
   } catch (err: any) {
     ElMessage.error(`刀具 STL 解析失败：${err?.message ?? String(err)}`)
@@ -718,6 +815,8 @@ async function onRun() {
     })
     await nextTick()
     redraw()
+    setRasterArrangeMeshGhost(terrainArrangeMesh, true)
+    setRasterArrangeMeshGhost(toolArrangeMesh, true)
     const autoParity = store.result
       ? tryGripBaselineParityBundle(
           store.result,
@@ -1120,6 +1219,7 @@ watch([canvasRef, result], () => {
 })
 
 onBeforeUnmount(() => {
+  clearRasterArrangeMeshes()
   const c = canvasRef.value
   if (c) {
     const ctx = c.getContext('2d')

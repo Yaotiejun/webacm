@@ -36,6 +36,7 @@ export function toKiriLegacyProcess(process: FdmProcess): Record<string, unknown
     outputFillMult: process.outputFillMult,
     outputSparseMult: process.outputSparseMult,
     firstLayerBrim: process.enableBrim ? process.brimCount : 0,
+    outputBrimCount: process.enableBrim ? (process.brimCount ?? 0) : 0,
     outputBrimOffset: process.brimOffset,
     outputRaft: process.enableRaft,
     outputRaftSpacing: process.raftSpacing,
@@ -59,6 +60,7 @@ export function buildKiriSettingsPayload(input: {
     controller: buildLegacyFdmControllerProfile(
       input.controllerProfile as Record<string, unknown> | null | undefined,
     ),
+    filter: { FDM: 'Any.Generic.Marlin' },
     bounds: undefined,
     widget: {
       _single: {

@@ -11,7 +11,7 @@ export function buildLegacyFdmDeviceProfile(
     bedWidth: 200,
     bedDepth: 200,
     maxHeight: 200,
-    originCenter: true,
+    originCenter: false,
     bedBelt: false,
     extruders: [
       {
@@ -19,6 +19,8 @@ export function buildLegacyFdmDeviceProfile(
         extFilament: 1.75,
       },
     ],
+    gcodePre: ['G28', 'G90', 'M82'],
+    gcodePost: ['M104 S0', 'M140 S0', 'M84'],
   }
   if (!override) return base
   const extruders = Array.isArray(override.extruders) && override.extruders.length > 0

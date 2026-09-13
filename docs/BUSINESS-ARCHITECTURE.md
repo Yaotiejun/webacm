@@ -7,12 +7,12 @@
 
 ## 1. 产品定位
 
-**shape_cam（clip-apps）** 是将原 **grip 多独立 Web 应用** 收敛为 **单一管理控制台** 后的制造软件套件，覆盖：
+**shape_cam（clip-apps）** 是将原 **grip 多独立 Web 应用** 收敛为 **单一管理控制台** 后的制造软件套件，主产品线覆盖：
 
-- **减材 / 刀路**：CAM（铣削）、Raster（2.5D 路径）
-- **增材**：FDM 切片
-- **表面处理**：STL 纹理位移
-- **现场执行**：Carvera 雕刻机、GridBot 打印机
+- **桌面激光切割**：独立 Laser（Kiri `mode/laser`）
+- **CNC**：CAM 铣削刀路
+- **增材**：**FDM + SLA**（树脂光固化）
+- **扩展**：Raster、Texturizer、Carvera / GridBot 现场执行
 
 业务目标：**在同一浏览器会话中完成「准备 → 生成刀路/路径 → 预览 → 下发设备」**，并以迁移门保证与 grip 行为可回归对账。
 
@@ -20,14 +20,15 @@
 mindmap
   root((shape_cam))
     准备
-      模型导入 STL/OBJ
+      模型导入 STL/OBJ/SVG
       设备与工艺配置
       材料与 Jobs
     生成
       CAM 铣削 G-code
+      Laser 切割路径
       FDM 切片
+      SLA 层切片
       Raster 刀路
-      STL 纹理网格
     验证
       3D/2D 预览
       grip 金样对账
@@ -98,12 +99,14 @@ flowchart TB
 
 | 业务域 | 核心能力（已实现） | 业务未完成 / 可选深化 |
 |--------|-------------------|------------------------|
-| **CAM** | Legacy 刀路生成、G-code 预览、grip fixture 对比、session 导出 | 生产环境 live export 签字；无 legacy 时 placeholder |
-| **FDM** | 工作区、切片 Worker、层预览、合成刀路示意 | 与 grip 完全一致的 legacy 真切片；材料库占位 |
-| **Raster** | planar / tracing / radial、WebGPU、基线参数 | lathe/workload 未产品化；浏览器 E2E 基线 |
-| **Texturizer** | subdiv、位移、binary STL 导出、离线金样 | 生产 STL live soak；部分 UI 占位文案 |
-| **Carvera** | WS 连接、状态解析 L/W/A/H、Jobs、3D 机模 | 发送/日志/JOG 等面板仍为「占位」级 |
-| **GridBot** | M105/M114、Advanced OK、发送队列子集 | 较 grip server 深度浅的 sender UI |
+| **CAM** | Legacy 刀路、G-code 预览、**STL/OBJ 工件导入**、**库存机床 ~28 台**、**Animate**、**laser on/off op** | live export 签字 |
+| **FDM** | 切片/export、设备 ~58、gyroid/vase、支撑、belt、Animate、dual-extruder、paint densify | 真机 soak；paint shader |
+| **Laser** | `/laser` shell + **TS MVP** SVG/DXF→nest→G-code + 库存设备 + 金样 SHA | vendor laser worker、完整 nest/pack、HW-08 |
+| **SLA** | `/sla` shell + mesh→Photon/CTB/GOO MVP + 层 scrub + 金样 SHA | vendor sla worker、完整 ChiTu crypto / Elegoo GOO、HW-09 |
+| **Raster** | planar / tracing / radial、WebGPU、基线参数、**radial V3（lathe 向）** UI+桥接 | 真 lathe V4 / workload；浏览器 E2E 基线 |
+| **Texturizer** | subdiv、位移、binary STL 导出、离线金样 | 生产 STL live soak |
+| **Carvera** | WS 连接、状态解析 L/W/A/H、Jobs、3D 机模、ack 门控发送、A 轴 JOG、WCS 置零、覆写滑条、**SD upload+play（XMODEM）**、**SD 文件浏览/播放/删除**、**M495 探针/调平向导** | 真机 soak / 探针结果可视化 |
+| **GridBot** | M105/M114、Advanced OK、发送队列、**暂停 park / 取消关断 / 急停**、温控设定、JOG、checksum、FDM 宏、进给覆写 | 服务端文件 spool（`*kick`）不在产品范围 |
 | **Jobs** | FDM/Carvera/GridBot 列表与本地持久化 | 无集中服务端 Job 仓库 |
 | **迁移治理** | Scoreboard 100% 离线门、有序管线文档 | Live soak 需现场签字 |
 
@@ -151,7 +154,9 @@ flowchart LR
 | `/settings` | 全局设置 | 平台 |
 | `/fdm` … `/material/fdm` | FDM 准备 | 增材规划 |
 | `/jobs/fdm` | FDM Jobs | 增材作业管理 |
-| `/cam` | CAM 刀路 | 减材规划 |
+| `/cam` | CAM / CNC 刀路 | 减材规划 |
+| `/laser` | 桌面激光切割 | 2D 切割规划 |
+| `/sla` | SLA 树脂 | 光固化规划 |
 | `/raster` | Raster 刀路 | 2.5D 规划 |
 | `/texturizer` | STL 纹理 | 表面处理规划 |
 | `/jobs/carvera` | Carvera Jobs | 减材执行准备 |
@@ -178,7 +183,7 @@ flowchart LR
   style A7 fill:#fff3cd
 ```
 
-> **业务注记**：步骤 A7 在 UI 上仍为「逐行发送（占位）」；协议与 store 已具备，操作体验未完全达到原 carve-control。
+> **业务注记**：步骤 A7 支持 **ack 逐行发送** 与 **SD upload+play（XMODEM）** 双路径；mock bridge 可离线验证上传进度与 `|P:` 播放状态。
 
 ### 5.2 增材：FDM → GridBot
 
@@ -195,7 +200,7 @@ flowchart LR
   style B3 fill:#fff3cd
 ```
 
-> **业务注记**：B3 在 legacy 未加载时走 placeholder 路径，业务上不等于「已上线切片服务」。
+> **业务注记**：B3 在 legacy 加载后走 `fdm_slice` → `fdm_prepare` → `fdm_export`；失败时回退 preview-path G-code。
 
 ### 5.3 2.5D：Raster 独立交付
 
@@ -230,7 +235,7 @@ flowchart LR
 | raster-path-main | Raster | `/raster` | 主模式已交付；lathe 等未纳入 |
 | stlTexturizer-main | STL 纹理 | `/texturizer` | 主流程已交付 |
 | carve-control-main | Carvera | `/carvera` | 协议/预览已迁；控制台深度不足 |
-| grid-bot-master | GridBot | `/gridbot` | 协议/队列子集已迁；UI 浅于原版 |
+| grid-bot-master | GridBot | `/gridbot` | sender UX 已加深（park/急停/温控/JOG）；无 Pi 服务端 spool |
 | app-server 等 | （无独立菜单） | 迁移门 only | 业务未提供托管服务 |
 | wattzup / basic-ftp | — | — | **不纳入产品范围** |
 
@@ -383,8 +388,10 @@ timeline
     CAM live 签字 : 生产 CAM 可信
     设备真机 soak : 车间验证
   section 中期 P2
-    Carvera/GridBot UI 对标 grip : 去占位
-    FDM legacy 真切片 : 替换 placeholder
+    Carvera UI 对标 grip : 去占位（ack/JOG/宏已落地）
+    Carvera SD upload+play : XMODEM 已接通
+    FDM fdm_prepare/export : 已接线（失败回退 preview-path）
+    FDM 设备 JSON 档案 : 持续补全
   section 长期 P3
     Raster E2E + lathe : 扩展模式
     可选云端 Jobs : 多站协作
@@ -398,6 +405,7 @@ timeline
 |------|------|
 | [OPERATIONS.md](./OPERATIONS.md) | 运行步骤与功能验证对照表 |
 | [TECHNICAL-ARCHITECTURE.md](./TECHNICAL-ARCHITECTURE.md) | 组件、Worker、bridge、数据流 |
+| [KIRI-MIGRATION-GAP.md](./KIRI-MIGRATION-GAP.md) | Kiri-Moto ↔ shapexcam 能力差距与迁移优先级 |
 | `clip-apps/SOAK.md` | Live 验收命令与环境变量 |
 | `clip-apps/src/core/migration/migrationProgressScoreboard.ts` | 域权重与 remaining 文案 |
 

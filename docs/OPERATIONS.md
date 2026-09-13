@@ -139,6 +139,8 @@ npm run preview
 | FDM 设备 / 工艺 / 材料 | `/devices/fdm` 等 | FDM 元数据 |
 | FDM Jobs | `/jobs/fdm` | 作业列表 |
 | CAM 刀路 | `/cam` | 铣削 CAM |
+| Laser 切割 | `/laser` | 桌面激光 |
+| SLA 树脂 | `/sla` | 光固化 |
 | Raster 刀路 | `/raster` | 2.5D 路径 |
 | STL 纹理 | `/texturizer` | 网格位移 |
 | Carvera Jobs | `/jobs/carvera` | G-code 作业库 |
@@ -160,7 +162,7 @@ npm run preview
 | **L1 迁移门** | `npm run test:migration` | ~1141 条，不含 `*.live.spec.ts` | 1–2 min |
 | **L2 产品门** | `npm run migration:gates` | 7 域 + FDM + bridge + bootstrap | 短 |
 | **L3 离线 soak** | `npm run soak:offline` | 各 `*MigrationComplete` | 短 |
-| **L4 有序管线离线** | `npm run migration:ordered:offline` | 四阶段离线检查 | 短 |
+| **L4 有序管线离线** | `npm run migration:ordered:offline` | 六阶段离线检查（含 laser/sla soak） | 短 |
 | **L5 Bridge mock** | `npm run soak:device-bridge:mock` | 无真机 WS 烟测 | ~15s |
 | **L6 Live** | 见 §7 各模块「自动化」列 | 需 env + 真机/legacy | 按需 |
 | **L7 E2E 基线** | `npm run test:e2e:raster-baseline` | 浏览器 planar 基线 | 需 build/ dev |
@@ -254,10 +256,37 @@ npm run migration:quickstart
 | FDM-10 | 设备/工艺/材料页 | `/devices/fdm` 等 | 打开各子页 | 列表可浏览（占位数据可接受） | — | P2 |
 | FDM-11 | FDM Jobs | `/jobs/fdm` | 打开列表 | 可看到已保存作业 | — | P2 |
 | FDM-12 | Kiri PoC | `/fdm` | 「Kiri PoC」 | 有响应或明确错误 | — | P2 |
+| FDM-13 | 双挤出 + purge | 两模型不同 E + Purge tower | 结构 digest SHA = `FDM_DUAL_EXTRUDER_GOLDEN_SHA256`（`dualExtruderStructuralDigest`） | `npm run test:fdm:dual-extruder` / `FDM_DUAL_EXTRUDER_SOAK=1 npm run soak:fdm:dual-extruder` | P1 |
+| FDM-14 | 手动支撑 paint | Support mode=manual → Paint support 点选（Three 球体 overlay） | 切片 preview 有 support 路径；viewport 可见 paint 球 | `npm run test:fdm:support-paint` | P1 |
 
 | 状态 |
 |------|
-| FDM-01~06 `[ ]` FDM-07~12 `[ ]` |
+| FDM-01~06 `[ ]` FDM-07~14 `[ ]` |
+
+---
+
+
+### 7.2a Laser（`/laser`）
+
+| ID | 功能 | 路由 | 手动步骤 | 预期 | 自动化 | 级 |
+|----|------|------|----------|------|--------|-----|
+| LAS-01 | 页面加载 | `/laser` | 打开 Laser | 「导入 SVG/DXF」「slice」可见 | `test:e2e:migration` | P0 |
+
+| 状态 |
+|------|
+| LAS-01 `[ ]` |
+
+---
+
+### 7.2b SLA（`/sla`）
+
+| ID | 功能 | 路由 | 手动步骤 | 预期 | 自动化 | 级 |
+|----|------|------|----------|------|--------|-----|
+| SLA-01 | 页面加载 | `/sla` | 打开 SLA | Import STL/OBJ + slice 可见 | `test:e2e:migration` | P0 |
+
+| 状态 |
+|------|
+| SLA-01 `[ ]` |
 
 ---
 
@@ -321,11 +350,12 @@ npm run migration:quickstart
 | CV-10 | 暂停/继续发送 | 发送中点暂停 | `sendPaused` 行为符合 UI | — | P2 |
 | CV-11 | JOG | 占位面板 X+/Y- 等 | 连接时发出 G91 类命令 | — | P2 |
 | CV-12 | 日志导出 | 导出 TXT/JSON | 文件含筛选后日志 | — | P2 |
-| CV-13 | 真机 soak | TCP 指向控制器 | L/W/A/H、Buf 稳定 | `CARVERA_SOAK_WS` + `soak:carvera` | P2 |
+| CV-13 | M495 探针向导 | 右侧「探针/调平」选模式 → 预览行 → 发送 | 日志发出 `M495X…`；grid 含 A/B/I/J/H；三轴含 O+F | `carveraProbeM495.spec.ts` | P1 |
+| CV-14 | 真机 soak | TCP 指向控制器 | L/W/A/H、Buf 稳定；可选真机 M495 | `CARVERA_SOAK_WS` + `soak:carvera` | P2 |
 
 | 状态 |
 |------|
-| CV-01~06 `[ ]` CV-07~13 `[ ]` |
+| CV-01~06 `[ ]` CV-07~14 `[ ]` |
 
 ---
 
@@ -404,6 +434,7 @@ npm run soak:device-bridge:mock
 | `CAM_LIVE_MIGRATION` | 有序管线 Phase1 | `1` |
 | `VITE_KIRI_LEGACY_CAM` | CAM legacy | `1` |
 | `FDM_LIVE_MIGRATION` | FDM live spec | `1` |
+| `FDM_DUAL_EXTRUDER_SOAK` | 双挤出 + purge soak | `1` |
 | `VITE_KIRI_LEGACY_FDM` | FDM legacy | `1` |
 | `DEVICE_PRODUCTION_SOAK` | 设备 live spec | `1` |
 | `CARVERA_SOAK_WS` | Carvera soak | `ws://localhost:9999/carvera` |

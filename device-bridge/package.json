@@ -8,7 +8,8 @@
     "dev:carvera:tcp": "CARVERA_BACKEND=tcp CARVERA_TCP=127.0.0.1:3001 tsx watch src/main.ts",
     "dev:gridbot:tcp": "GRIDBOT_BACKEND=tcp GRIDBOT_TCP=127.0.0.1:3002 tsx watch src/main.ts",
     "start": "node --enable-source-maps dist/main.js",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/carvera/*.test.ts"
   },
   "dependencies": {
     "ws": "^8.18.0"

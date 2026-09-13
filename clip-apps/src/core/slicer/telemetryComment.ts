@@ -107,6 +107,12 @@ export function appendLegacyFdmDebugComments(
   if (!debug) return
   lines.push(`; legacyFdmReady=${debug.ready ? '1' : '0'}`)
   lines.push(`; legacyFdmHasSliceImpl=${debug.hasSliceImpl ? '1' : '0'}`)
+  if (debug.hasPrepareImpl != null) {
+    lines.push(`; legacyFdmHasPrepareImpl=${debug.hasPrepareImpl ? '1' : '0'}`)
+  }
+  if (debug.hasExportImpl != null) {
+    lines.push(`; legacyFdmHasExportImpl=${debug.hasExportImpl ? '1' : '0'}`)
+  }
   if (debug.initErrorMessage) {
     lines.push(`; legacyFdmInitError=${debug.initErrorMessage.replace(/\r?\n/g, ' ').slice(0, 240)}`)
   }

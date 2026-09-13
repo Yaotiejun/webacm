@@ -11,6 +11,8 @@ export const MIGRATION_SOAK_SCRIPTS = Object.freeze({
   rasterE2e: 'test:e2e:raster-baseline',
   fdmLive: 'soak:fdm:live',
   deviceBridgeMock: 'soak:device-bridge:mock',
+  laser: 'soak:laser',
+  sla: 'soak:sla',
 } as const)
 
 /** Env flags for `migration:ordered-soak` live phases. */

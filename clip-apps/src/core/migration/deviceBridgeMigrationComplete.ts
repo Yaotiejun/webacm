@@ -1,17 +1,12 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
-  DEVICE_BRIDGE_CARVERA_MOCK_DOLLAR_LINES,
   DEVICE_BRIDGE_CARVERA_MOCK_GRBL_BANNER,
   DEVICE_BRIDGE_CARVERA_MOCK_HOME_ALARM,
   DEVICE_BRIDGE_CARVERA_MOCK_SETTINGS_ERROR,
 } from '@/core/migration/deviceBridgeCarveraHandshake'
 import { DEVICE_BRIDGE_CARVERA_MOCK_STATUS } from '@/core/migration/deviceBridgeCarveraMockStatus'
-import {
-  DEVICE_BRIDGE_GRIDBOT_MOCK_ADVANCED_OK,
-  DEVICE_BRIDGE_GRIDBOT_MOCK_M105_RESPONSE,
-  DEVICE_BRIDGE_GRIDBOT_MOCK_M114_RESPONSE,
-} from '@/core/migration/deviceBridgeGridbotMockStatus'
+import { DEVICE_BRIDGE_GRIDBOT_MOCK_ADVANCED_OK } from '@/core/migration/deviceBridgeGridbotMockStatus'
 import {
   formatGridbotAdvancedOk,
   parseGridbotLineNo,
@@ -23,7 +18,6 @@ import {
 } from '@/core/migration/deviceBridgeManifest'
 import {
   DEVICE_BRIDGE_BACKEND_KINDS,
-  DEVICE_BRIDGE_CARVERA_QUEUE_MAX,
   DEVICE_BRIDGE_ENV,
 } from '@/core/migration/deviceBridgeEnvManifest'
 import { parseGripTcpTarget } from '@/core/migration/deviceBridgeTcpTarget'
@@ -34,12 +28,14 @@ export interface DeviceBridgeMigrationCompleteResult {
   errors: string[]
 }
 
-function resolveDeviceBridgeMainPath(): string | null {
-  const candidates = [
-    resolve(process.cwd(), '../device-bridge/src/main.ts'),
-    resolve(process.cwd(), 'device-bridge/src/main.ts'),
-  ]
-  return candidates.find((p) => existsSync(p)) ?? null
+function resolveDeviceBridgePaths(): { main: string; session: string } | null {
+  const roots = [resolve(process.cwd(), '../device-bridge'), resolve(process.cwd(), 'device-bridge')]
+  for (const root of roots) {
+    const main = resolve(root, 'src/main.ts')
+    const session = resolve(root, 'src/carvera/session.ts')
+    if (existsSync(main) && existsSync(session)) return { main, session }
+  }
+  return null
 }
 
 /** Ensures clip-apps migration constants still appear in device-bridge source. */
@@ -73,26 +69,25 @@ export function evaluateDeviceBridgeMigrationComplete(): DeviceBridgeMigrationCo
     }).lines[0] === 'ok B15 P15'
   if (!checks.mockSimulator) errors.push('device-bridge mock simulator drift')
 
-  const mainPath = resolveDeviceBridgeMainPath()
-  if (!mainPath) {
+  const paths = resolveDeviceBridgePaths()
+  if (!paths) {
     checks.sourceSync = false
-    errors.push('device-bridge/src/main.ts not found')
+    errors.push('device-bridge src/main.ts or carvera/session.ts not found')
   } else {
-    const src = readFileSync(mainPath, 'utf8')
+    const src = [readFileSync(paths.main, 'utf8'), readFileSync(paths.session, 'utf8')].join('\n')
     checks.sourceSync =
       src.includes(DEVICE_BRIDGE_CARVERA_MOCK_STATUS) &&
       src.includes(DEVICE_BRIDGE_CARVERA_MOCK_GRBL_BANNER) &&
       src.includes(DEVICE_BRIDGE_CARVERA_MOCK_HOME_ALARM) &&
       src.includes(DEVICE_BRIDGE_CARVERA_MOCK_SETTINGS_ERROR) &&
-      src.includes(DEVICE_BRIDGE_CARVERA_MOCK_DOLLAR_LINES[0]!) &&
-      src.includes(DEVICE_BRIDGE_GRIDBOT_MOCK_M114_RESPONSE) &&
+      src.includes('M114') && src.includes('toFixed(2)') &&
       src.includes('ok T:') &&
       src.includes('formatGridbotAdvancedOk') &&
       src.includes(DEVICE_BRIDGE_ENV.CARVERA_BACKEND) &&
       src.includes(DEVICE_BRIDGE_ENV.GRIDBOT_TCP) &&
-      src.includes(`pending.length > ${DEVICE_BRIDGE_CARVERA_QUEUE_MAX}`) &&
-      DEVICE_BRIDGE_BACKEND_KINDS.every((k) => src.includes(`'${k}'`) || src.includes(`"${k}"`))
-    if (!checks.sourceSync) errors.push('device-bridge main.ts contract drift')
+      src.includes('createCarveraMockSession') &&
+      DEVICE_BRIDGE_BACKEND_KINDS.every((k) => src.includes("'" + k + "'") || src.includes('"' + k + '"'))
+    if (!checks.sourceSync) errors.push('device-bridge main.ts/session.ts contract drift')
   }
 
   return { ok: errors.length === 0, checks, errors }

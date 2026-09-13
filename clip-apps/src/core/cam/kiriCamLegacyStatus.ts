@@ -16,7 +16,7 @@ export function formatKiriCamLegacyStatus(): KiriCamLegacyStatus {
   if (mode === '0') {
     return {
       label:
-        'Legacy 已关闭（VITE_KIRI_LEGACY_CAM=0）。将使用 bbox 估算与示意 G-code；在 .env.development 设为 1 或 auto 后重启 dev server。',
+        'Legacy 已关闭（VITE_KIRI_LEGACY_CAM=0）。将使用 bbox 估算与示意 G-code；在 .env 设为 1 后重启。',
       readyForLegacyJob: false,
       hintLevel: 'warning',
     }
@@ -45,7 +45,7 @@ export function formatKiriCamLegacyStatus(): KiriCamLegacyStatus {
 
   if (h.hasSlice && !h.hasExport) {
     return {
-      label: `${impl}。仅 slice 可用：将生成 kiri-cam-slice-only 诊断 G-code；检查 export.js 动态 import。${
+      label: `${impl}。仅 slice 可用：将生成 kiri-cam-slice-only 诊断 G-code；检查 kiriCamLegacyBootstrap 导出。${
         h.legacyImportErrorMessage ? ` 错误：${h.legacyImportErrorMessage}` : ''
       }`,
       readyForLegacyJob: true,
@@ -56,8 +56,8 @@ export function formatKiriCamLegacyStatus(): KiriCamLegacyStatus {
   const err = h.legacyImportErrorMessage
   return {
     label: `${impl}。无法加载 legacy CAM（${mode === '1' ? 'strict' : 'auto'} 模式）。${
-      err ? ` import 失败：${err}` : ' 请确认 dev server 可访问 src/core/cam/legacy/kiri 且 three 已安装。'
-    } 当前将回退 cam-placeholder。`,
+      err ? ` bootstrap 失败：${err}` : ' 请确认 cam legacy 树与 Vite 打包正常。'
+    } ${mode === '1' ? 'strict 下不会回退 placeholder。' : '当前将回退 cam-placeholder。'}`,
     readyForLegacyJob: false,
     hintLevel: 'error',
   }

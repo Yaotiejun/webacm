@@ -22,9 +22,9 @@ export interface FdmProcess {
   sliceAdaptive?: boolean
   sliceMinHeight?: number
 
-  // infill
+  // infill (Kiri LISTS.infill parity)
   sliceFillSparse: number
-  sliceFillType: 'none' | 'grid' | 'linear' | 'hex'
+  sliceFillType: 'none' | 'grid' | 'linear' | 'hex' | 'triangle' | 'gyroid' | 'vase'
   sliceFillOverlap: number
 
   // support (minimal subset)
@@ -38,6 +38,15 @@ export interface FdmProcess {
   sliceSupportXYExpand?: number
   sliceSupportInterfaceLayers?: number
   sliceSupportOutlineOnly?: boolean
+  /** Multi-extruder: which nozzle prints supports (Kiri sliceSupportNozzle). */
+  sliceSupportNozzle?: number
+  /**
+   * Support generation mode (Kiri sliceSupportType).
+   * `manual` uses widget.anno.paint spheres; `automatic` uses overhang projection.
+   */
+  sliceSupportType?: 'automatic' | 'manual' | 'disabled'
+  /** Purge tower size (mm² area side derived via sqrt); 0 = off (Kiri outputPurgeTower). */
+  outputPurgeTower?: number
 
   // brim / raft
   enableBrim?: boolean
@@ -67,6 +76,14 @@ export interface FdmProcess {
   // misc
   outputMinLayerTime: number
   zHopDistance: number
+
+  // belt (CR-30 style; only used when device.bedBelt)
+  sliceAngle?: number
+  beltAnchor?: number
+  firstLayerBeltLead?: number
+  firstLayerBeltBump?: number
+  firstLayerBeltFact?: number
+  firstLayerYOffset?: number
 
   // ranges (layer overrides)
   ranges?: FdmProcessRange[]

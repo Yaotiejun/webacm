@@ -1,757 +1,1049 @@
 <template>
-  <el-container class="cam-root">
-    <el-aside width="320px" class="cam-aside">
-      <div class="pane-title">设备配置</div>
-      <div class="pane-body">
-        <div v-if="!device" class="hint">尚未加载示例配置。</div>
-        <el-descriptions v-else :column="1" border size="small">
-          <el-descriptions-item label="名称">{{ device.deviceName }}</el-descriptions-item>
-          <el-descriptions-item label="工作区">
-            {{ device.bedWidth }} x {{ device.bedDepth }} x {{ device.maxHeight }}
-          </el-descriptions-item>
-          <el-descriptions-item label="原点">
-            {{ device.originCenter ? '中心' : '角落' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="G-code 后缀">{{ device.gcodeFExt || '默认' }}</el-descriptions-item>
-        </el-descriptions>
+  <div class="km-workspace">
+    <div class="km-canvas-host">
+      <GcodePreviewPanel
+        ref="camGcodePreviewRef"
+        layout="cam"
+        kind="cam"
+        :job-gcode="camViewportGcode"
+        :tool-position="camViewportTool"
+        :stem-color="camViewportStem"
+        :preset-overrides="camGcodePresetOverrides"
+        :path-progress="camPathProgress"
+        title="CAM — G-code 路径预览（Legacy / 导入）"
+      >
+        <template #toolbar>
+          <el-button size="small" plain @click="onPickCamGcodePreview">导入 G-code 覆盖预览</el-button>
+          <el-button size="small" plain @click="onLoadGripFixturePreview">grip 金样预览</el-button>
+          <el-button size="small" plain @click="onCopyCamFixtureSha">复制 fixture SHA</el-button>
+          <el-button size="small" plain @click="onCompareCamMotionToFixture">对比金样 motion</el-button>
+          <el-button size="small" plain :disabled="!camViewportGcodeOverride" @click="onClearCamGcodePreviewOverride">
+            清除覆盖
+          </el-button>
+          <span class="hint">
+            运行「生成 CAM 刀路」后显示 legacy cam_export G-code；可导入 G-code 覆盖预览。需已配置 ops 与 stock。
+          </span>
+        </template>
+        <template #afterViewport>
+          <input
+            ref="camGcodePreviewInputRef"
+            type="file"
+            accept=".gcode,.nc,.tap,.txt"
+            style="display: none"
+            @change="onCamGcodePreviewFile"
+          />
+        </template>
+      </GcodePreviewPanel>
+      <div v-if="camPhase === 'animate' && camViewportGcode" class="km-layer-bar cam-anim-bar">
+        <span>Path</span>
+        <input
+          type="range"
+          class="km-layer-range"
+          min="0"
+          max="1000"
+          step="1"
+          :value="Math.round(camPathProgress * 1000)"
+          @input="onCamPathProgressInput"
+        />
+        <span>{{ Math.round(camPathProgress * 100) }}%</span>
+        <button type="button" class="km-layer-anim-btn" @click="toggleCamAnimatePlayback">
+          {{ camAnimatePlaying ? 'Pause' : 'Play' }}
+        </button>
+        <label class="km-layer-anim-speed">
+          speed
+          <input type="range" min="1" max="20" step="1" v-model.number="camAnimateSpeed" />
+        </label>
       </div>
-    </el-aside>
+    </div>
 
-    <el-container class="cam-center">
-      <el-main class="cam-main cam-main-center">
-        <GcodePreviewPanel
-          layout="cam"
-          kind="cam"
-          :job-gcode="camViewportGcode"
-          :tool-position="camViewportTool"
-          :stem-color="camViewportStem"
-          :preset-overrides="camGcodePresetOverrides"
-          title="CAM — G-code 路径预览（Legacy / 导入）"
-        >
-          <template #toolbar>
-            <el-button size="small" plain @click="onPickCamGcodePreview">导入 G-code 覆盖预览</el-button>
-            <el-button size="small" plain @click="onLoadGripFixturePreview">grip 金样预览</el-button>
-            <el-button size="small" plain @click="onCopyCamFixtureSha">复制 fixture SHA</el-button>
-            <el-button size="small" plain @click="onCompareCamMotionToFixture">对比金样 motion</el-button>
-            <el-button size="small" plain :disabled="!camViewportGcodeOverride" @click="onClearCamGcodePreviewOverride">
-              清除覆盖
-            </el-button>
-            <span class="hint">
-              运行「生成 CAM 刀路」后显示 legacy cam_export G-code；可导入 G-code 覆盖预览。需已配置 ops 与 stock。
-            </span>
-          </template>
-          <template #afterViewport>
-            <input
-              ref="camGcodePreviewInputRef"
-              type="file"
-              accept=".gcode,.nc,.tap,.txt"
-              style="display: none"
-              @change="onCamGcodePreviewFile"
-            />
-          </template>
-        </GcodePreviewPanel>
-      </el-main>
-    </el-container>
-
-    <el-aside width="360px" class="cam-aside-right">
-      <div class="pane-title">工艺 / 操作</div>
-      <div class="pane-body">
-        <div class="pane-title" style="padding: 4px 0; border: none">刀具库</div>
-        <ul v-if="tools.length" class="tool-list">
-          <li v-for="tool in tools" :key="tool.id" class="tool-item">
-            <strong>{{ tool.name }}</strong>
-            <span class="hint">
-              (#{{ tool.number }}) {{ tool.type }}
-              {{ tool.flute_diam }}
-              {{ tool.metric ? 'mm' : 'in' }}
-            </span>
-          </li>
-        </ul>
-        <div v-else class="hint">暂无刀具。</div>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 4px 0; border: none">CAM 工艺管理</div>
-        <div class="pane-body" style="padding-top: 0">
-          <div v-if="profiles && profiles.length" style="margin-bottom: 8px">
-            <el-table :data="profiles" size="small" border height="140">
-              <el-table-column prop="name" label="名称" min-width="120">
-                <template #default="scope">
-                  <span>{{ scope.row.name }}</span>
-                  <el-tag
-                    v-if="scope.row.name === selectedProfileName"
-                    size="small"
-                    type="success"
-                    style="margin-left: 4px"
-                  >
-                    当前
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="200">
-                <template #default="scope">
-                  <el-button
-                    size="small"
-                    type="primary"
-                    text
-                    @click.stop="store.selectProfile(scope.row.name)"
-                  >
-                    选择
-                  </el-button>
-                  <el-button
-                    size="small"
-                    type="danger"
-                    text
-                    @click.stop="store.deleteProfile(scope.row.name)"
-                  >
-                    删除
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-
-          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px">
-            <el-button
-              size="small"
-              plain
-              :disabled="!device || !process"
-              @click="onCloneFromCurrent"
-            >
-              从当前配置克隆
-            </el-button>
-          </div>
-
-          <el-divider />
-
-          <div class="pane-title" style="padding: 4px 0; border: none">配置导入 / 导出</div>
-          <input
-            ref="camPartFileInputRef"
-            type="file"
-            accept=".stl"
-            style="display: none"
-            @change="onCamPartFileChange"
-          />
-          <input
-            id="cam-profile-file-input"
-            type="file"
-            accept="application/json,.json"
-            style="display: none"
-            @change="onImportProfileFile"
-          />
-          <input
-            id="cam-session-bundle-file-input"
-            type="file"
-            accept="application/json,.json"
-            style="display: none"
-            @change="onImportSessionBundlePreview"
-          />
-          <input
-            id="cam-session-preview-settings-file-input"
-            type="file"
-            accept="application/json,.json"
-            style="display: none"
-            @change="onImportSessionPreviewSettings"
-          />
-          <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <el-button size="small" plain @click="onPickCamPartStl">导入工件 STL</el-button>
-            <el-button size="small" plain @click="onLoadSample">加载示例配置</el-button>
-            <el-button size="small" plain @click="onResetProfile">重置为空</el-button>
-            <el-button size="small" plain @click="onClickImport">导入 JSON</el-button>
-            <el-button size="small" plain @click="onClickImportSessionBundle">导入会话包预览</el-button>
-            <el-button size="small" plain @click="onClickImportSessionPreviewSettings">导入预览设置</el-button>
-            <el-button size="small" plain @click="onExportSessionPreviewSettings">导出预览设置</el-button>
-            <el-button size="small" plain :disabled="!device" @click="onExportProfile">导出 JSON</el-button>
-            <el-button size="small" plain :disabled="!device || !process || !(localOps && localOps.length)" @click="onExportProfileWithLocalOps">
-              导出(含本地ops)
-            </el-button>
-          </div>
-          <div class="hint" style="margin-top: 6px">
-            工件：{{ camPartInfoText }}
-          </div>
-          <div class="hint" style="margin-top: 6px">
-            JSON 结构与 grip/grid-apps-master/src/cli/kiri-cam-(device|tools|process).json 对齐：
-            { device, tools, process }
-            <div style="margin-top: 4px">
-              自测闭环建议：加载示例 → 修改右侧工艺参数/ops → 导出 JSON（或“导出(含本地ops)”）→ 重置为空 → 导入刚导出的 JSON → 检查字段是否一致。
-            </div>
-          </div>
+    <div class="km-mode-tools">
+      <button type="button" :class="{ selected: camPhase === 'arrange' }" @click="onCamArrangeClick">
+        <span class="km-mode-ico" aria-hidden="true">▣</span>
+        <span>arrange</span>
+      </button>
+      <button
+        type="button"
+        :class="{ selected: camPhase === 'slice' }"
+        :disabled="!device || !process || camRunInProgress"
+        @click="onCamSliceClick"
+      >
+        <span class="km-mode-ico" aria-hidden="true">☰</span>
+        <span>slice</span>
+      </button>
+      <button type="button" :class="{ selected: camPhase === 'preview' }" @click="onCamPreviewClick">
+        <span class="km-mode-ico" aria-hidden="true">⧉</span>
+        <span>preview</span>
+      </button>
+      <button
+        type="button"
+        :class="{ selected: camPhase === 'animate' }"
+        :disabled="!camViewportGcode"
+        :title="camViewportGcode ? 'Scrub toolpath progress' : 'Generate or import G-code first'"
+        @click="onCamAnimateClick"
+      >
+        <span class="km-mode-ico" aria-hidden="true">▶</span>
+        <span>animate</span>
+      </button>
+      <div class="km-mode-export-wrap">
+        <button type="button" :class="{ selected: camPhase === 'export' }" @click="onCamExportClick">
+          <span class="km-mode-ico" aria-hidden="true">⇩</span>
+          <span>export</span>
+        </button>
+        <div class="km-export-menu" v-if="camPhase === 'export'">
+          <button type="button" :disabled="!(camResult && camResult.gcodeText)" @click="onDownloadGcode">
+            Download G-code
+          </button>
+          <button type="button" :disabled="!(camResult && camResult.gcodeText)" @click="onCopyCamGcode">
+            Copy G-code
+          </button>
+          <button type="button" :disabled="!(camResult && camResult.gcodeText)" @click="onSaveToCarvera">
+            Save as Carvera Job
+          </button>
+          <button type="button" :disabled="!(camResult && camResult.gcodeText)" @click="onSaveToGridBot">
+            Save as GridBot Job
+          </button>
         </div>
+      </div>
+    </div>
 
-        <div class="pane-title" style="padding: 4px 0; border: none">Stock / Z / 速度</div>
-        <div v-if="process" class="pane-body" style="padding-top: 4px">
-          <el-form :model="process" label-width="90px" label-position="left" size="small">
-            <el-form-item label="Stock 尺寸">
-              <el-input-number
-                v-model="process.camStockX"
-                :min="0"
-                :max="10000"
-                :step="1"
-                controls-position="right"
-              />
-              <span style="margin: 0 4px">x</span>
-              <el-input-number
-                v-model="process.camStockY"
-                :min="0"
-                :max="10000"
-                :step="1"
-                controls-position="right"
-              />
-              <span style="margin: 0 4px">x</span>
-              <el-input-number
-                v-model="process.camStockZ"
-                :min="0"
-                :max="10000"
-                :step="1"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Stock Offset">
-              <el-switch v-model="process.camStockOffset" />
-              <span class="hint" style="margin-left: 6px">是否以模型为基准自动对齐毛坯</span>
-            </el-form-item>
-            <el-form-item label="Stock 启用">
-              <el-switch v-model="process.camStockOn" />
-            </el-form-item>
-
-            <el-divider content-position="left">Z / 原点</el-divider>
-            <el-form-item label="Z Anchor">
-              <el-select v-model="process.camZAnchor" style="width: 120px">
-                <el-option label="top" value="top" />
-                <el-option label="middle" value="middle" />
-                <el-option label="bottom" value="bottom" />
+    <div class="km-mid">
+      <div class="km-panel-left">
+        <div class="km-panel-scroll">
+          <details class="km-set-group" open>
+            <summary class="km-set-header">Machine</summary>
+            <div class="km-set-body">
+              <div class="km-row">
+                <label>device</label>
+              </div>
+              <el-select
+                v-model="stockCamDeviceId"
+                placeholder="选择机床"
+                size="small"
+                style="width: 100%"
+                filterable
+                @change="onStockCamDeviceChange"
+              >
+                <el-option-group v-if="stockCamFeatured.length" label="Featured">
+                  <el-option v-for="id in stockCamFeatured" :key="`f-${id}`" :label="id" :value="id" />
+                </el-option-group>
+                <el-option-group v-if="stockCamOther.length" label="Stock">
+                  <el-option v-for="id in stockCamOther" :key="`o-${id}`" :label="id" :value="id" />
+                </el-option-group>
               </el-select>
-              <span class="hint" style="margin-left: 6px">Z 参考面</span>
-            </el-form-item>
-            <el-form-item label="Z 偏移">
-              <el-input-number v-model="process.camZOffset" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Z Bottom">
-              <el-input-number v-model="process.camZBottom" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Z Clearance">
-              <el-input-number v-model="process.camZClearance" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Z Thru">
-              <el-input-number v-model="process.camZThru" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Z 顶面为原点">
-              <el-switch v-model="process.camOriginTop" />
-            </el-form-item>
-
-            <el-divider content-position="left">快速移动</el-divider>
-            <el-form-item label="Fast XY">
-              <el-input-number
-                v-model="process.camFastFeed"
-                :min="0"
-                :max="100000"
-                :step="10"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Fast Z">
-              <el-input-number
-                v-model="process.camFastFeedZ"
-                :min="0"
-                :max="100000"
-                :step="10"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-form>
-        </div>
-        <div v-else class="hint">暂无工艺配置。</div>
-
-        <div v-if="process" class="pane-body" style="margin-top: 8px; padding-top: 4px">
-          <div style="font-weight: 600; margin-bottom: 4px">工艺摘要 / 快速编辑</div>
-          <el-form :model="process" label-width="90px" label-position="left" size="small">
-            <el-divider content-position="left">粗加工</el-divider>
-            <el-form-item label="Rough Tool">
-              <el-input-number v-model="process.camRoughTool" :min="0" :max="9999" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Rough Spindle">
-              <el-input-number
-                v-model="process.camRoughSpindle"
-                :min="0"
-                :max="100000"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Rough Down">
-              <el-input-number
-                v-model="process.camRoughDown"
-                :min="0"
-                :max="1000"
-                :step="0.1"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Rough Over">
-              <el-input-number
-                v-model="process.camRoughOver"
-                :min="0"
-                :max="10"
-                :step="0.1"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Rough Speed">
-              <el-input-number
-                v-model="process.camRoughSpeed"
-                :min="0"
-                :max="100000"
-                controls-position="right"
-              />
-            </el-form-item>
-
-            <el-divider content-position="left">外轮廓</el-divider>
-            <el-form-item label="Outline Tool">
-              <el-input-number v-model="process.camOutlineTool" :min="0" :max="9999" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Outline Spindle">
-              <el-input-number
-                v-model="process.camOutlineSpindle"
-                :min="0"
-                :max="100000"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Outline Down">
-              <el-input-number
-                v-model="process.camOutlineDown"
-                :min="0"
-                :max="1000"
-                :step="0.1"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Outline Over">
-              <el-input-number
-                v-model="process.camOutlineOver"
-                :min="0"
-                :max="10"
-                :step="0.1"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Outline Speed">
-              <el-input-number
-                v-model="process.camOutlineSpeed"
-                :min="0"
-                :max="100000"
-                controls-position="right"
-              />
-            </el-form-item>
-
-            <el-divider content-position="left">钻孔</el-divider>
-            <el-form-item label="Drill Tool">
-              <el-input-number v-model="process.camDrillTool" :min="0" :max="9999" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Drill Spindle">
-              <el-input-number v-model="process.camDrillSpindle" :min="0" :max="100000" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Drill Down">
-              <el-input-number v-model="process.camDrillDown" :min="0" :max="1000" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Drill Lift">
-              <el-input-number v-model="process.camDrillLift" :min="0" :max="100" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Drill Dwell">
-              <el-input-number v-model="process.camDrillDwell" :min="0" :max="10" :step="0.1" controls-position="right" />
-            </el-form-item>
-            <el-form-item label="Drill DownSpeed">
-              <el-input-number v-model="process.camDrillDownSpeed" :min="0" :max="100000" :step="10" controls-position="right" />
-            </el-form-item>
-
-            <el-divider content-position="left">方向 / 其它</el-divider>
-            <el-form-item label="Conventional">
-              <el-switch v-model="process.camConventional" />
-            </el-form-item>
-            <el-form-item label="Depth First">
-              <el-switch v-model="process.camDepthFirst" />
-            </el-form-item>
-            <el-form-item label="Ease Down">
-              <el-switch v-model="process.camEaseDown" />
-            </el-form-item>
-            <el-form-item label="Force ZMax">
-              <el-switch v-model="process.camForceZMax" />
-            </el-form-item>
-
-            <el-divider content-position="left">输出 / G-code</el-divider>
-            <el-form-item label="反转 X">
-              <el-switch v-model="process.outputInvertX" />
-            </el-form-item>
-            <el-form-item label="反转 Y">
-              <el-switch v-model="process.outputInvertY" />
-            </el-form-item>
-            <el-form-item label="Stock ClipTo">
-              <el-switch v-model="process.camStockClipTo" />
-            </el-form-item>
-            <el-form-item label="Arc Tol">
-              <el-input-number
-                v-model="process.camArcTolerance"
-                :min="0"
-                :max="1"
-                :step="0.001"
-                controls-position="right"
-              />
-            </el-form-item>
-            <el-form-item label="Arc Res">
-              <el-input-number
-                v-model="process.camArcResolution"
-                :min="0"
-                :max="1"
-                :step="0.001"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-form>
-        </div>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 4px 0; border: none">操作序列 (ops)</div>
-        <ul v-if="effectiveOps && effectiveOps.length" class="ops-list">
-          <li
-            v-for="(op, idx) in effectiveOps"
-            :key="idx"
-            class="ops-item"
-            :style="{ cursor: 'pointer', fontWeight: selectedOpIndex === idx ? '600' : 'normal' }"
-            @click="selectOp(idx)"
-          >
-            <strong>#{{ idx + 1 }} {{ op.type }}</strong>
-            <div class="hint">
-              tool={{ op.tool ?? '—' }} spindle={{ op.spindle ?? '—' }} down={{ op.down ?? '—' }} step={{ op.step ?? '—' }}
+              <p v-if="device" class="km-hint" style="margin-top: 6px">
+                {{ device.deviceName }} · {{ device.bedWidth }}×{{ device.bedDepth }}×{{ device.maxHeight }}
+              </p>
+              <div v-else class="hint">尚未加载设备。</div>
             </div>
-          </li>
-        </ul>
-        <div v-else class="hint">暂无操作。</div>
+          </details>
 
-        <el-divider />
-
-        <div class="pane-title" style="padding: 4px 0; border: none">编辑操作（本地）</div>
-        <div v-if="selectedOp" class="hint">
-          <div style="display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center">
-            <div>tool</div>
-            <el-input-number
-              size="small"
-              :model-value="selectedOp.tool ?? null"
-              :min="0"
-              controls-position="right"
-              @update:model-value="(v: number | null) => updateSelectedOpField('tool', (v ?? undefined) as any)"
-            />
-
-            <div>spindle</div>
-            <el-input-number
-              size="small"
-              :model-value="selectedOp.spindle ?? null"
-              :min="0"
-              controls-position="right"
-              @update:model-value="(v: number | null) => updateSelectedOpField('spindle', (v ?? undefined) as any)"
-            />
-
-            <div>down</div>
-            <el-input-number
-              size="small"
-              :model-value="selectedOp.down ?? null"
-              :min="0"
-              controls-position="right"
-              @update:model-value="(v: number | null) => updateSelectedOpField('down', (v ?? undefined) as any)"
-            />
-
-            <div>step</div>
-            <el-input-number
-              size="small"
-              :model-value="selectedOp.step ?? null"
-              :min="0"
-              controls-position="right"
-              @update:model-value="(v: number | null) => updateSelectedOpField('step', (v ?? undefined) as any)"
-            />
-          </div>
-          <div class="hint" style="margin-top: 6px">
-            说明：这里只改组件本地 ops 副本，不写回 profile JSON；重新导入/加载会重置。
-          </div>
-        </div>
-        <div v-else class="hint">点击上方 ops 选择一条再编辑。</div>
-
-        <el-divider />
-
-        <div class="pane-title" style="padding: 4px 0; border: none">CAM 刀路生成（Legacy桥接）</div>
-        <div class="pane-body" style="padding-top: 4px">
-          <el-alert
-            v-if="kiriLegacyBridgeLabel"
-            :title="kiriLegacyBridgeLabel"
-            :type="kiriLegacyHintLevel"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 8px"
-          />
-          <div v-if="camRunInProgress" style="margin-bottom: 8px">
-            <div class="hint" style="margin-bottom: 4px">
-              {{ camRunProgressLabel || 'Legacy cam_slice…' }}（{{ camRunProgress }}%）
+          <details class="km-set-group" open>
+            <summary class="km-set-header">Profile</summary>
+            <div class="km-set-body">
+              <div class="km-row">
+                <label>profile</label>
+                <el-select
+                  :model-value="selectedProfileName"
+                  placeholder="选择配置"
+                  size="small"
+                  style="width: 100%"
+                  filterable
+                  :disabled="!(profiles && profiles.length)"
+                  @change="onSelectCamProfile"
+                >
+                  <el-option v-for="p in profiles" :key="p.name" :label="p.name" :value="p.name" />
+                </el-select>
+              </div>
+              <div class="hint" style="margin-top: 4px">完整导入/导出见右侧「配置」。</div>
             </div>
-            <el-progress :percentage="camRunProgress" :stroke-width="10" />
-          </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px">
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :disabled="!device || !process || camRunInProgress"
-              :loading="camRunInProgress"
-              @click="onRunCamJob"
-            >
-              生成 CAM 刀路（Legacy）
-            </el-button>
-            <el-button
-              v-if="camResult && camResult.gcodeText"
-              size="small"
-              plain
-              @click="onCopyCamGcode"
-            >
-              复制 G-code
-            </el-button>
-            <el-button
-              v-if="camResult && camResult.gcodeText"
-              size="small"
-              plain
-              @click="onDownloadGcode"
-            >
-              下载 G-code
-            </el-button>
-            <el-button
-              v-if="camResult && camResult.gcodeText"
-              size="small"
-              type="success"
-              plain
-              @click="onSaveToCarvera"
-            >
-              保存为 Carvera Job
-            </el-button>
-            <el-button
-              v-if="camResult && camResult.gcodeText"
-              size="small"
-              type="success"
-              plain
-              @click="onSaveToGridBot"
-            >
-              保存为 GridBot Job
-            </el-button>
-          </div>
-          <div v-if="camGcodeMotionHint" class="hint" style="margin-top: 6px">{{ camGcodeMotionHint }}</div>
-          <div v-if="camGripMotionMatchHint" class="hint" style="margin-top: 4px">{{ camGripMotionMatchHint }}</div>
-          <el-input
-            type="textarea"
-            :rows="8"
-            :model-value="camResultText"
-            readonly
-            style="font-family: monospace; font-size: 11px"
-          />
+          </details>
+
+          <template v-if="process">
+            <details class="km-set-group" open>
+              <summary class="km-set-header">连接片</summary>
+              <div class="km-set-body">
+                <el-form :model="process" label-width="72px" label-position="left" size="small">
+                  <el-form-item label="宽度">
+                    <el-input-number v-model="process.camTabsWidth" :min="0.005" :max="100" :step="0.5" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="高度">
+                    <el-input-number v-model="process.camTabsHeight" :min="0.005" :max="100" :step="0.5" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="深度">
+                    <el-input-number v-model="process.camTabsDepth" :min="0.005" :max="100" :step="0.5" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="中线">
+                    <el-switch v-model="process.camTabsMidline" />
+                  </el-form-item>
+                </el-form>
+              </div>
+            </details>
+
+            <details class="km-set-group" open>
+              <summary class="km-set-header">坯料</summary>
+              <div class="km-set-body">
+                <el-form :model="process" label-width="72px" label-position="left" size="small">
+                  <el-form-item label="宽度">
+                    <el-input-number v-model="process.camStockX" :min="0" :max="10000" :step="1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="深度">
+                    <el-input-number v-model="process.camStockY" :min="0" :max="10000" :step="1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="高度">
+                    <el-input-number v-model="process.camStockZ" :min="0" :max="10000" :step="1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="偏移">
+                    <el-switch v-model="process.camStockOffset" />
+                  </el-form-item>
+                  <el-form-item label="启用">
+                    <el-switch v-model="process.camStockOn" />
+                  </el-form-item>
+                  <el-form-item label="裁剪到">
+                    <el-switch v-model="process.camStockClipTo" />
+                  </el-form-item>
+                  <el-form-item label="索引">
+                    <el-switch v-model="process.camStockIndexed" />
+                  </el-form-item>
+                  <el-form-item v-if="process.camStockIndexed" label="显示网格">
+                    <el-switch v-model="process.camStockIndexGrid" />
+                  </el-form-item>
+                </el-form>
+              </div>
+            </details>
+
+            <details class="km-set-group" open>
+              <summary class="km-set-header">限制</summary>
+              <div class="km-set-body">
+                <el-form :model="process" label-width="80px" label-position="left" size="small">
+                  <el-form-item label="Z锚点">
+                    <el-select v-model="process.camZAnchor" style="width: 100%" :disabled="!!process.camStockIndexed">
+                      <el-option label="top" value="top" />
+                      <el-option label="middle" value="middle" />
+                      <el-option label="bottom" value="bottom" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="Z偏移">
+                    <el-input-number v-model="process.camZOffset" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Z顶部">
+                    <el-input-number v-model="process.camZTop" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Z底部">
+                    <el-input-number v-model="process.camZBottom" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Z间隙">
+                    <el-input-number v-model="process.camZClearance" :min="0.01" :max="100" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Z穿透">
+                    <el-input-number v-model="process.camZThru" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="XY进给">
+                    <el-input-number v-model="process.camFastFeed" :min="0" :max="100000" :step="10" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Z进给">
+                    <el-input-number v-model="process.camFastFeedZ" :min="0" :max="100000" :step="10" controls-position="right" />
+                  </el-form-item>
+                </el-form>
+              </div>
+            </details>
+
+            <details class="km-set-group" open>
+              <summary class="km-set-header">输出</summary>
+              <div class="km-set-body">
+                <el-form :model="process" label-width="96px" label-position="left" size="small">
+                  <el-form-item label="缓降">
+                    <el-switch v-model="process.camEaseDown" />
+                  </el-form-item>
+                  <el-form-item label="深度优先">
+                    <el-switch v-model="process.camDepthFirst" />
+                  </el-form-item>
+                  <el-form-item label="内部优先">
+                    <el-switch v-model="process.camInnerFirst" />
+                  </el-form-item>
+                  <el-form-item label="工具初始化">
+                    <el-switch v-model="process.camToolInit" />
+                  </el-form-item>
+                  <el-form-item label="首次Z最大值">
+                    <el-switch v-model="process.camFirstZMax" />
+                  </el-form-item>
+                  <el-form-item label="强制Z最大值">
+                    <el-switch v-model="process.camForceZMax" />
+                  </el-form-item>
+                  <el-form-item label="传统">
+                    <el-switch v-model="process.camConventional" />
+                  </el-form-item>
+                  <el-form-item v-if="process.camEaseDown" label="缓降角度">
+                    <el-input-number v-model="process.camEaseAngle" :min="0.1" :max="85" :step="1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="啮合系数">
+                    <el-input-number v-model="process.camFullEngage" :min="0.1" :max="1" :step="0.05" controls-position="right" />
+                  </el-form-item>
+                </el-form>
+              </div>
+            </details>
+
+            <details class="km-set-group" open>
+              <summary class="km-set-header">原点</summary>
+              <div class="km-set-body">
+                <el-form :model="process" label-width="80px" label-position="left" size="small">
+                  <el-form-item label="原点顶部">
+                    <el-switch v-model="process.camOriginTop" />
+                  </el-form-item>
+                  <el-form-item label="原点中心">
+                    <el-switch v-model="process.camOriginCenter" />
+                  </el-form-item>
+                  <el-form-item label="X偏移">
+                    <el-input-number v-model="process.camOriginOffX" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Y偏移">
+                    <el-input-number v-model="process.camOriginOffY" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Z偏移">
+                    <el-input-number v-model="process.camOriginOffZ" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                </el-form>
+              </div>
+            </details>
+
+            <details class="km-set-group" open>
+              <summary class="km-set-header">专家模式</summary>
+              <div class="km-set-body">
+                <el-form :model="process" label-width="88px" label-position="left" size="small">
+                  <el-form-item label="弧输出">
+                    <el-switch v-model="process.camArcEnabled" />
+                  </el-form-item>
+                  <el-form-item v-if="process.camArcEnabled" label="弧公差">
+                    <el-input-number v-model="process.camArcTolerance" :min="0" :max="100" :step="0.01" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item v-if="process.camArcEnabled" label="弧分辨率">
+                    <el-input-number v-model="process.camArcResolution" :min="0" :max="180" :step="1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="跳过阴影">
+                    <el-switch v-model="process.camExpertFast" />
+                  </el-form-item>
+                  <el-form-item label="真实阴影">
+                    <el-switch v-model="process.camTrueShadow" />
+                  </el-form-item>
+                </el-form>
+              </div>
+            </details>
+          </template>
+          <div v-else class="hint" style="padding: 8px">暂无工艺配置。</div>
         </div>
+      </div>
 
-        <el-divider />
-
-        <div class="pane-title" style="padding: 4px 0; border: none">最近运行</div>
-        <div class="pane-body" style="padding-top: 4px">
-          <el-empty v-if="!recentRuns.length" description="暂无运行记录" />
-          <el-table v-else :data="recentRuns" size="small" border height="180">
-            <el-table-column prop="name" label="名称" min-width="180" />
-            <el-table-column label="后端" width="90">
-              <template #default="scope">
-                {{ scope.row.result.backend }}
-              </template>
-            </el-table-column>
-            <el-table-column label="网格" width="110">
-              <template #default="scope">
-                {{ camGeometryMeshLabel(scope.row.geometry) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="时间" min-width="150">
-              <template #default="scope">
-                {{ new Date(scope.row.createdAt).toLocaleString() }}
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="190">
-              <template #default="scope">
-                <el-button size="small" text @click="onLoadRecentRun(scope.row.id)">载入</el-button>
-                <el-button size="small" text @click="onSaveRecentRunAsProfile(scope.row.id)">另存配置</el-button>
-                <el-button size="small" text @click="onCompareRecentRun(scope.row.id)">对比当前</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div v-if="recentRuns.length" style="margin-top: 8px">
-            <el-button size="small" plain @click="onClearRecentRuns">清空运行记录</el-button>
+      <div class="km-mid-center">
+        <div v-if="camRunInProgress" class="km-float-preview cam-run-float">
+          <div class="hint" style="margin-bottom: 4px">
+            {{ camRunProgressLabel || 'Legacy cam_slice…' }}（{{ camRunProgress }}%）
           </div>
+          <el-progress :percentage="camRunProgress" :stroke-width="10" />
         </div>
+      </div>
 
-        <el-divider />
+      <div class="km-panel-right">
+        <div class="km-panel-scroll">
+          <details class="km-set-group" open>
+            <summary class="km-set-header">刀具库</summary>
+            <div class="km-set-body">
+              <ul v-if="tools.length" class="tool-list">
+                <li v-for="tool in tools" :key="tool.id" class="tool-item">
+                  <strong>{{ tool.name }}</strong>
+                  <span class="hint">
+                    (#{{ tool.number }}) {{ tool.type }}
+                    {{ tool.flute_diam }}
+                    {{ tool.metric ? 'mm' : 'in' }}
+                  </span>
+                </li>
+              </ul>
+              <div v-else class="hint">暂无刀具。</div>
+            </div>
+          </details>
 
-        <div class="pane-title" style="padding: 4px 0; border: none">差异详情（快照 vs 当前）</div>
-        <div class="pane-body" style="padding-top: 4px">
-          <div v-if="!diffTargetRunName" class="hint">先在“最近运行”里点击“对比当前”。</div>
-          <template v-else>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
-              <div class="hint">目标快照：{{ diffTargetRunName }}</div>
-              <div style="display: flex; gap: 6px">
-                <el-button size="small" plain :disabled="undoStack.length === 0" @click="onUndoApply">撤销</el-button>
-                <el-button size="small" plain :disabled="redoStack.length === 0" @click="onRedoApply">重做</el-button>
+          <details class="km-set-group" open>
+            <summary class="km-set-header">配置</summary>
+            <div class="km-set-body">
+              <div v-if="profiles && profiles.length" style="margin-bottom: 8px">
+                <el-table :data="profiles" size="small" border height="140">
+                  <el-table-column prop="name" label="名称" min-width="120">
+                    <template #default="scope">
+                      <span>{{ scope.row.name }}</span>
+                      <el-tag
+                        v-if="scope.row.name === selectedProfileName"
+                        size="small"
+                        type="success"
+                        style="margin-left: 4px"
+                      >
+                        当前
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="200">
+                    <template #default="scope">
+                      <el-button
+                        size="small"
+                        type="primary"
+                        text
+                        @click.stop="store.selectProfile(scope.row.name)"
+                      >
+                        选择
+                      </el-button>
+                      <el-button
+                        size="small"
+                        type="danger"
+                        text
+                        @click.stop="store.deleteProfile(scope.row.name)"
+                      >
+                        删除
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+
+              <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px">
+                <el-button
+                  size="small"
+                  plain
+                  :disabled="!device || !process"
+                  @click="onCloneFromCurrent"
+                >
+                  从当前配置克隆
+                </el-button>
+              </div>
+
+              <div class="km-set-subheader">配置导入 / 导出</div>
+              <input
+                ref="camPartFileInputRef"
+                type="file"
+                accept=".stl,.obj,.STL,.OBJ"
+                style="display: none"
+                @change="onCamPartFileChange"
+              />
+              <input
+                id="cam-profile-file-input"
+                type="file"
+                accept="application/json,.json"
+                style="display: none"
+                @change="onImportProfileFile"
+              />
+              <input
+                id="cam-session-bundle-file-input"
+                type="file"
+                accept="application/json,.json"
+                style="display: none"
+                @change="onImportSessionBundlePreview"
+              />
+              <input
+                id="cam-session-preview-settings-file-input"
+                type="file"
+                accept="application/json,.json"
+                style="display: none"
+                @change="onImportSessionPreviewSettings"
+              />
+              <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                <el-button size="small" plain @click="onPickCamPartStl">导入工件 STL/OBJ</el-button>
+                <el-button size="small" plain @click="onLoadSample">加载示例配置</el-button>
+                <el-button size="small" plain @click="onResetProfile">重置为空</el-button>
+                <el-button size="small" plain @click="onClickImport">导入 JSON</el-button>
+                <el-button size="small" plain @click="onClickImportSessionBundle">导入会话包预览</el-button>
+                <el-button size="small" plain @click="onClickImportSessionPreviewSettings">导入预览设置</el-button>
+                <el-button size="small" plain @click="onExportSessionPreviewSettings">导出预览设置</el-button>
+                <el-button size="small" plain :disabled="!device" @click="onExportProfile">导出 JSON</el-button>
+                <el-button size="small" plain :disabled="!device || !process || !(localOps && localOps.length)" @click="onExportProfileWithLocalOps">
+                  导出(含本地ops)
+                </el-button>
+              </div>
+              <div class="hint" style="margin-top: 6px">
+                工件：{{ camPartInfoText }}
+              </div>
+              <div class="hint" style="margin-top: 6px">
+                JSON 结构与 grip/grid-apps-master/src/cli/kiri-cam-(device|tools|process).json 对齐：
+                { device, tools, process }
+                <div style="margin-top: 4px">
+                  自测闭环建议：加载示例 → 修改右侧工艺参数/ops → 导出 JSON（或“导出(含本地ops)”）→ 重置为空 → 导入刚导出的 JSON → 检查字段是否一致。
+                </div>
               </div>
             </div>
-            <el-empty v-if="!diffItems.length" description="关键字段无差异" />
-            <el-table v-else :data="diffItems" size="small" border height="180">
-              <el-table-column label="字段" min-width="120">
-                <template #default="scope">
-                  <span style="display: inline-flex; align-items: center; gap: 6px">
-                    <el-tag v-if="scope.row.riskLevel === 'high'" size="small" type="danger" effect="light">高风险</el-tag>
-                    <el-tag
-                      v-else-if="scope.row.riskLevel === 'medium'"
+          </details>
+
+          <details class="km-set-group" open>
+            <summary class="km-set-header">工序默认</summary>
+            <div class="km-set-body">
+              <div v-if="process">
+                <el-form :model="process" label-width="90px" label-position="left" size="small">
+                  <el-divider content-position="left">粗加工</el-divider>
+                  <el-form-item label="Rough Tool">
+                    <el-input-number v-model="process.camRoughTool" :min="0" :max="9999" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Rough Spindle">
+                    <el-input-number
+                      v-model="process.camRoughSpindle"
+                      :min="0"
+                      :max="100000"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+                  <el-form-item label="Rough Down">
+                    <el-input-number
+                      v-model="process.camRoughDown"
+                      :min="0"
+                      :max="1000"
+                      :step="0.1"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+                  <el-form-item label="Rough Over">
+                    <el-input-number
+                      v-model="process.camRoughOver"
+                      :min="0"
+                      :max="10"
+                      :step="0.1"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+                  <el-form-item label="Rough Speed">
+                    <el-input-number
+                      v-model="process.camRoughSpeed"
+                      :min="0"
+                      :max="100000"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+
+                  <el-divider content-position="left">外轮廓</el-divider>
+                  <el-form-item label="Outline Tool">
+                    <el-input-number v-model="process.camOutlineTool" :min="0" :max="9999" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Outline Spindle">
+                    <el-input-number
+                      v-model="process.camOutlineSpindle"
+                      :min="0"
+                      :max="100000"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+                  <el-form-item label="Outline Down">
+                    <el-input-number
+                      v-model="process.camOutlineDown"
+                      :min="0"
+                      :max="1000"
+                      :step="0.1"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+                  <el-form-item label="Outline Over">
+                    <el-input-number
+                      v-model="process.camOutlineOver"
+                      :min="0"
+                      :max="10"
+                      :step="0.1"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+                  <el-form-item label="Outline Speed">
+                    <el-input-number
+                      v-model="process.camOutlineSpeed"
+                      :min="0"
+                      :max="100000"
+                      controls-position="right"
+                    />
+                  </el-form-item>
+
+                  <el-divider content-position="left">钻孔</el-divider>
+                  <el-form-item label="Drill Tool">
+                    <el-input-number v-model="process.camDrillTool" :min="0" :max="9999" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Drill Spindle">
+                    <el-input-number v-model="process.camDrillSpindle" :min="0" :max="100000" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Drill Down">
+                    <el-input-number v-model="process.camDrillDown" :min="0" :max="1000" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Drill Lift">
+                    <el-input-number v-model="process.camDrillLift" :min="0" :max="100" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Drill Dwell">
+                    <el-input-number v-model="process.camDrillDwell" :min="0" :max="10" :step="0.1" controls-position="right" />
+                  </el-form-item>
+                  <el-form-item label="Drill DownSpeed">
+                    <el-input-number v-model="process.camDrillDownSpeed" :min="0" :max="100000" :step="10" controls-position="right" />
+                  </el-form-item>
+
+                  <el-divider content-position="left">输出坐标</el-divider>
+                  <el-form-item label="反转 X">
+                    <el-switch v-model="process.outputInvertX" />
+                  </el-form-item>
+                  <el-form-item label="反转 Y">
+                    <el-switch v-model="process.outputInvertY" />
+                  </el-form-item>
+                </el-form>
+              </div>
+              <div v-else class="hint">暂无工艺配置。</div>
+            </div>
+          </details>
+
+          <details class="km-set-group" open>
+            <summary class="km-set-header">操作序列 (ops)</summary>
+            <div class="km-set-body">
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px">
+                <el-button size="small" type="warning" plain @click="addLaserOnOp">+ laser on</el-button>
+                <el-button size="small" plain @click="addLaserOffOp">+ laser off</el-button>
+              </div>
+              <ul v-if="effectiveOps && effectiveOps.length" class="ops-list">
+                <li
+                  v-for="(op, idx) in effectiveOps"
+                  :key="idx"
+                  class="ops-item"
+                  :style="{ cursor: 'pointer', fontWeight: selectedOpIndex === idx ? '600' : 'normal' }"
+                  @click="selectOp(idx)"
+                >
+                  <strong>#{{ idx + 1 }} {{ op.type }}</strong>
+                  <div class="hint">
+                    <template v-if="op.type === 'laser on' || op.type === 'laser'">
+                      power={{ op.power ?? '—' }} adapt={{ op.adapt ? 'on' : 'off' }} flat={{ op.flat ? 'on' : 'off' }}
+                    </template>
+                    <template v-else-if="op.type === 'laser off'">disable script</template>
+                    <template v-else>
+                      tool={{ op.tool ?? '—' }} spindle={{ op.spindle ?? '—' }} down={{ op.down ?? '—' }} step={{
+                        op.step ?? '—'
+                      }}
+                    </template>
+                  </div>
+                </li>
+              </ul>
+              <div v-else class="hint">暂无操作。可添加 laser on/off（雕刻机激光附件，非独立 Laser mode）。</div>
+            </div>
+          </details>
+
+          <details class="km-set-group" open>
+            <summary class="km-set-header">编辑操作（本地）</summary>
+            <div class="km-set-body">
+              <div v-if="selectedOp" class="hint">
+                <div style="display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center">
+                  <template v-if="selectedOp.type === 'laser on' || selectedOp.type === 'laser'">
+                    <div>power</div>
+                    <el-input-number
                       size="small"
-                      type="warning"
-                      effect="light"
-                    >
-                      中风险
-                    </el-tag>
-                    <span>{{ scope.row.label }}</span>
-                  </span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="current" label="当前值" min-width="120" />
-              <el-table-column prop="snapshot" label="快照值" min-width="120" />
-              <el-table-column label="操作" width="80">
-                <template #default="scope">
-                  <el-button size="small" text @click="onApplyDiffItem(scope.row)">应用</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <div class="pane-title" style="padding: 4px 0; border: none; margin-top: 8px">操作日志</div>
-            <div style="display: flex; gap: 8px; margin-bottom: 6px">
-              <el-button size="small" plain :disabled="!diffActionLogs.length" @click="onExportDiffLogs">导出日志</el-button>
-              <el-button size="small" plain :disabled="!diffTargetRunId" @click="onExportCamSessionBundle">导出会话包</el-button>
+                      :model-value="selectedOp.power ?? null"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('power', (v ?? undefined) as any)"
+                    />
+                    <div>adapt</div>
+                    <el-switch
+                      :model-value="!!selectedOp.adapt"
+                      @update:model-value="(v: boolean) => updateSelectedOpField('adapt', v)"
+                    />
+                    <div>adaptrp</div>
+                    <el-switch
+                      :model-value="!!selectedOp.adaptrp"
+                      :disabled="!selectedOp.adapt"
+                      @update:model-value="(v: boolean) => updateSelectedOpField('adaptrp', v)"
+                    />
+                    <div>minp</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.minp ?? null"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disabled="!selectedOp.adapt"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('minp', (v ?? undefined) as any)"
+                    />
+                    <div>maxp</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.maxp ?? null"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disabled="!selectedOp.adapt"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('maxp', (v ?? undefined) as any)"
+                    />
+                    <div>minz</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.minz ?? null"
+                      :disabled="!selectedOp.adapt"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('minz', (v ?? undefined) as any)"
+                    />
+                    <div>maxz</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.maxz ?? null"
+                      :disabled="!selectedOp.adapt"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('maxz', (v ?? undefined) as any)"
+                    />
+                    <div>flat</div>
+                    <el-switch
+                      :model-value="!!selectedOp.flat"
+                      @update:model-value="(v: boolean) => updateSelectedOpField('flat', v)"
+                    />
+                    <div>flatz</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.flatz ?? null"
+                      :disabled="!selectedOp.flat"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('flatz', (v ?? undefined) as any)"
+                    />
+                    <div>down</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.down ?? null"
+                      :min="0"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('down', (v ?? undefined) as any)"
+                    />
+                    <div>step</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.step ?? null"
+                      :min="0"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('step', (v ?? undefined) as any)"
+                    />
+                  </template>
+                  <template v-else-if="selectedOp.type === 'laser off'">
+                    <div class="hint" style="grid-column: 1 / -1">
+                      laser off：导出时注入 camLaserDisable；脚本可在工艺 JSON 的 camLaserDisable 中配置。
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div>tool</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.tool ?? null"
+                      :min="0"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('tool', (v ?? undefined) as any)"
+                    />
+
+                    <div>spindle</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.spindle ?? null"
+                      :min="0"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('spindle', (v ?? undefined) as any)"
+                    />
+
+                    <div>down</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.down ?? null"
+                      :min="0"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('down', (v ?? undefined) as any)"
+                    />
+
+                    <div>step</div>
+                    <el-input-number
+                      size="small"
+                      :model-value="selectedOp.step ?? null"
+                      :min="0"
+                      controls-position="right"
+                      @update:model-value="(v: number | null) => updateSelectedOpField('step', (v ?? undefined) as any)"
+                    />
+                  </template>
+                </div>
+                <div class="hint" style="margin-top: 6px">
+                  说明：这里只改组件本地 ops 副本，不写回 profile JSON；重新导入/加载会重置。
+                </div>
+              </div>
+              <div v-else class="hint">点击上方 ops 选择一条再编辑。</div>
             </div>
-            <el-empty v-if="!diffActionLogs.length" description="暂无操作日志" />
-            <el-table v-else :data="diffActionLogs" size="small" border height="140">
-              <el-table-column prop="time" label="时间" width="150" />
-              <el-table-column prop="action" label="动作" width="80" />
-              <el-table-column prop="field" label="字段" min-width="120" />
-            </el-table>
-          </template>
-        </div>
-        <el-divider />
-        <div class="pane-title" style="padding: 4px 0; border: none">会话包预览（只读）</div>
-        <div class="pane-body" style="padding-top: 4px">
-          <div v-if="!sessionBundlePreview" class="hint">尚未导入会话包。</div>
-          <template v-else>
-            <div style="display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap">
-              <el-button size="small" type="primary" plain @click="applySessionBundleAll">一键应用全部</el-button>
-              <el-button size="small" plain @click="applySessionBundleField('device')">应用 device</el-button>
-              <el-button size="small" plain @click="applySessionBundleField('process')">应用 process</el-button>
-              <el-button size="small" plain @click="applySessionBundleField('ops')">应用 ops</el-button>
-              <el-select
-                size="small"
-                :model-value="sessionPreviewLimit"
-                style="width: 130px"
-                @change="(v: number) => onChangeSessionPreviewLimit(v)"
-              >
-                <el-option
-                  v-for="limit in SESSION_PREVIEW_LIMIT_OPTIONS"
-                  :key="limit"
-                  :value="limit"
-                  :label="`预览 ${limit} 项`"
-                />
-              </el-select>
-              <el-button size="small" plain @click="resetSessionPreviewLimit">恢复默认</el-button>
+          </details>
+
+          <details class="km-set-group" open>
+            <summary class="km-set-header">CAM 刀路生成（Legacy桥接）</summary>
+            <div class="km-set-body">
+              <el-alert
+                v-if="kiriLegacyBridgeLabel"
+                :title="kiriLegacyBridgeLabel"
+                :type="kiriLegacyHintLevel"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 8px"
+              />
+              <div v-if="camRunInProgress" style="margin-bottom: 8px">
+                <div class="hint" style="margin-bottom: 4px">
+                  {{ camRunProgressLabel || 'Legacy cam_slice…' }}（{{ camRunProgress }}%）
+                </div>
+                <el-progress :percentage="camRunProgress" :stroke-width="10" />
+              </div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :disabled="!device || !process || camRunInProgress"
+                  :loading="camRunInProgress"
+                  @click="onRunCamJob"
+                >
+                  生成 CAM 刀路（Legacy）
+                </el-button>
+                <el-button
+                  v-if="camResult && camResult.gcodeText"
+                  size="small"
+                  plain
+                  @click="onCopyCamGcode"
+                >
+                  复制 G-code
+                </el-button>
+                <el-button
+                  v-if="camResult && camResult.gcodeText"
+                  size="small"
+                  plain
+                  @click="onDownloadGcode"
+                >
+                  下载 G-code
+                </el-button>
+                <el-button
+                  v-if="camResult && camResult.gcodeText"
+                  size="small"
+                  type="success"
+                  plain
+                  @click="onSaveToCarvera"
+                >
+                  保存为 Carvera Job
+                </el-button>
+                <el-button
+                  v-if="camResult && camResult.gcodeText"
+                  size="small"
+                  type="success"
+                  plain
+                  @click="onSaveToGridBot"
+                >
+                  保存为 GridBot Job
+                </el-button>
+              </div>
+              <div v-if="camGcodeMotionHint" class="hint" style="margin-top: 6px">{{ camGcodeMotionHint }}</div>
+              <div v-if="camGripMotionMatchHint" class="hint" style="margin-top: 4px">{{ camGripMotionMatchHint }}</div>
+              <el-input
+                type="textarea"
+                :rows="8"
+                :model-value="camResultText"
+                readonly
+                style="font-family: monospace; font-size: 11px"
+              />
             </div>
-            <div
-              v-if="sessionBundleLegacyHintDiffText"
-              class="hint"
-              style="margin-bottom: 8px; color: #b88230; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
-            >
-              <span>Legacy hint diff: {{ sessionBundleLegacyHintDiffText }}</span>
-              <el-button size="small" text @click="copySessionBundleLegacyHintDiff">复制 diff</el-button>
-              <el-button size="small" text @click="copySessionBundleTargetLegacyHint">复制 target</el-button>
-              <el-button size="small" text @click="copySessionCurrentLegacyHealth">复制 current</el-button>
-              <el-button size="small" text @click="copySessionLegacyComparisonBundle">复制对账包</el-button>
+          </details>
+
+          <details class="km-set-group">
+            <summary class="km-set-header">最近运行</summary>
+            <div class="km-set-body">
+              <el-empty v-if="!recentRuns.length" description="暂无运行记录" />
+              <el-table v-else :data="recentRuns" size="small" border height="180">
+                <el-table-column prop="name" label="名称" min-width="180" />
+                <el-table-column label="后端" width="90">
+                  <template #default="scope">
+                    {{ scope.row.result.backend }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="网格" width="110">
+                  <template #default="scope">
+                    {{ camGeometryMeshLabel(scope.row.geometry) }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="时间" min-width="150">
+                  <template #default="scope">
+                    {{ new Date(scope.row.createdAt).toLocaleString() }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="190">
+                  <template #default="scope">
+                    <el-button size="small" text @click="onLoadRecentRun(scope.row.id)">载入</el-button>
+                    <el-button size="small" text @click="onSaveRecentRunAsProfile(scope.row.id)">另存配置</el-button>
+                    <el-button size="small" text @click="onCompareRecentRun(scope.row.id)">对比当前</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <div v-if="recentRuns.length" style="margin-top: 8px">
+                <el-button size="small" plain @click="onClearRecentRuns">清空运行记录</el-button>
+              </div>
             </div>
-            <div
-              class="hint"
-              style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
-            >
-              <span>traceSchemaVersion: {{ TRACE_SCHEMA_VERSION }}</span>
+          </details>
+
+          <details class="km-set-group">
+            <summary class="km-set-header">差异详情（快照 vs 当前）</summary>
+            <div class="km-set-body">
+              <div v-if="!diffTargetRunName" class="hint">先在“最近运行”里点击“对比当前”。</div>
+              <template v-else>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
+                  <div class="hint">目标快照：{{ diffTargetRunName }}</div>
+                  <div style="display: flex; gap: 6px">
+                    <el-button size="small" plain :disabled="undoStack.length === 0" @click="onUndoApply">撤销</el-button>
+                    <el-button size="small" plain :disabled="redoStack.length === 0" @click="onRedoApply">重做</el-button>
+                  </div>
+                </div>
+                <el-empty v-if="!diffItems.length" description="关键字段无差异" />
+                <el-table v-else :data="diffItems" size="small" border height="180">
+                  <el-table-column label="字段" min-width="120">
+                    <template #default="scope">
+                      <span style="display: inline-flex; align-items: center; gap: 6px">
+                        <el-tag v-if="scope.row.riskLevel === 'high'" size="small" type="danger" effect="light">高风险</el-tag>
+                        <el-tag
+                          v-else-if="scope.row.riskLevel === 'medium'"
+                          size="small"
+                          type="warning"
+                          effect="light"
+                        >
+                          中风险
+                        </el-tag>
+                        <span>{{ scope.row.label }}</span>
+                      </span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="current" label="当前值" min-width="120" />
+                  <el-table-column prop="snapshot" label="快照值" min-width="120" />
+                  <el-table-column label="操作" width="80">
+                    <template #default="scope">
+                      <el-button size="small" text @click="onApplyDiffItem(scope.row)">应用</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <div class="km-set-subheader" style="margin-top: 8px">操作日志</div>
+                <div style="display: flex; gap: 8px; margin-bottom: 6px">
+                  <el-button size="small" plain :disabled="!diffActionLogs.length" @click="onExportDiffLogs">导出日志</el-button>
+                  <el-button size="small" plain :disabled="!diffTargetRunId" @click="onExportCamSessionBundle">导出会话包</el-button>
+                </div>
+                <el-empty v-if="!diffActionLogs.length" description="暂无操作日志" />
+                <el-table v-else :data="diffActionLogs" size="small" border height="140">
+                  <el-table-column prop="time" label="时间" width="150" />
+                  <el-table-column prop="action" label="动作" width="80" />
+                  <el-table-column prop="field" label="字段" min-width="120" />
+                </el-table>
+              </template>
             </div>
-            <div
-              class="hint"
-              style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
-            >
-              <span>sourceLabel: {{ sessionBundleSourceLabelText }}</span>
-              <el-button size="small" text @click="copySessionBundleSourceLabel">复制 sourceLabel</el-button>
+          </details>
+
+          <details class="km-set-group">
+            <summary class="km-set-header">会话包预览（只读）</summary>
+            <div class="km-set-body">
+              <div v-if="!sessionBundlePreview" class="hint">尚未导入会话包。</div>
+              <template v-else>
+                <div style="display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap">
+                  <el-button size="small" type="primary" plain @click="applySessionBundleAll">一键应用全部</el-button>
+                  <el-button size="small" plain @click="applySessionBundleField('device')">应用 device</el-button>
+                  <el-button size="small" plain @click="applySessionBundleField('process')">应用 process</el-button>
+                  <el-button size="small" plain @click="applySessionBundleField('ops')">应用 ops</el-button>
+                  <el-select
+                    size="small"
+                    :model-value="sessionPreviewLimit"
+                    style="width: 130px"
+                    @change="(v: number) => onChangeSessionPreviewLimit(v)"
+                  >
+                    <el-option
+                      v-for="limit in SESSION_PREVIEW_LIMIT_OPTIONS"
+                      :key="limit"
+                      :value="limit"
+                      :label="`预览 ${limit} 项`"
+                    />
+                  </el-select>
+                  <el-button size="small" plain @click="resetSessionPreviewLimit">恢复默认</el-button>
+                </div>
+                <div
+                  v-if="sessionBundleLegacyHintDiffText"
+                  class="hint"
+                  style="margin-bottom: 8px; color: #b88230; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
+                >
+                  <span>Legacy hint diff: {{ sessionBundleLegacyHintDiffText }}</span>
+                  <el-button size="small" text @click="copySessionBundleLegacyHintDiff">复制 diff</el-button>
+                  <el-button size="small" text @click="copySessionBundleTargetLegacyHint">复制 target</el-button>
+                  <el-button size="small" text @click="copySessionCurrentLegacyHealth">复制 current</el-button>
+                  <el-button size="small" text @click="copySessionLegacyComparisonBundle">复制对账包</el-button>
+                </div>
+                <div
+                  class="hint"
+                  style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
+                >
+                  <span>traceSchemaVersion: {{ TRACE_SCHEMA_VERSION }}</span>
+                </div>
+                <div
+                  class="hint"
+                  style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
+                >
+                  <span>sourceLabel: {{ sessionBundleSourceLabelText }}</span>
+                  <el-button size="small" text @click="copySessionBundleSourceLabel">复制 sourceLabel</el-button>
+                </div>
+                <div
+                  class="hint"
+                  style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
+                >
+                  <span>sourceFingerprint: {{ sessionBundleSourceFingerprintText }}</span>
+                  <el-button size="small" text @click="copySessionBundleSourceFingerprint">复制 sourceFingerprint</el-button>
+                </div>
+                <el-descriptions :column="1" border size="small">
+                  <el-descriptions-item label="schemaVersion">
+                    {{ sessionBundlePreview.migrationMeta?.schemaVersion ?? '—' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="source">
+                    {{ sessionBundlePreview.migrationMeta?.source ?? '—' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="activeProfile">
+                    {{ sessionBundlePreview.migrationMeta?.activeProfile ?? '—' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="targetRun">
+                    {{ sessionBundlePreview.targetRun?.name ?? '—' }} / {{ sessionBundlePreview.targetRun?.result?.backend ?? '—' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item v-if="sessionBundlePreview.targetRun?.result?.legacyDebug" label="targetRun.legacy">
+                    slice={{ sessionBundlePreview.targetRun.result.legacyDebug.hasSlice ? 'Y' : 'N' }},
+                    export={{ sessionBundlePreview.targetRun.result.legacyDebug.hasExport ? 'Y' : 'N' }},
+                    ready={{ sessionBundlePreview.targetRun.result.legacyDebug.ready ? 'Y' : 'N' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="diff条目">
+                    {{ sessionBundlePreview.diff?.items?.length ?? 0 }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="diff日志">
+                    {{ sessionBundlePreview.diff?.logs?.length ?? 0 }}
+                  </el-descriptions-item>
+                  <el-descriptions-item
+                    v-if="sessionBundlePreview.migrationMeta?.engineHints?.targetGcodeSha256"
+                    label="targetGcodeSha256"
+                  >
+                    <span style="font-family: monospace; font-size: 11px; word-break: break-all">
+                      {{ sessionBundlePreview.migrationMeta.engineHints.targetGcodeSha256 }}
+                    </span>
+                  </el-descriptions-item>
+                  <el-descriptions-item
+                    v-if="sessionBundlePreview.migrationMeta?.engineHints?.targetLegacyReady != null"
+                    label="targetLegacyHint"
+                  >
+                    ready={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyReady ? 'Y' : 'N' }},
+                    slice={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyHasSlice ? 'Y' : 'N' }},
+                    export={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyHasExport ? 'Y' : 'N' }}
+                    <span v-if="sessionBundlePreview.migrationMeta.engineHints.targetLegacyImportError" class="hint">
+                      ，import={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyImportError }}
+                    </span>
+                  </el-descriptions-item>
+                </el-descriptions>
+              </template>
             </div>
-            <div
-              class="hint"
-              style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
-            >
-              <span>sourceFingerprint: {{ sessionBundleSourceFingerprintText }}</span>
-              <el-button size="small" text @click="copySessionBundleSourceFingerprint">复制 sourceFingerprint</el-button>
-            </div>
-            <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="schemaVersion">
-                {{ sessionBundlePreview.migrationMeta?.schemaVersion ?? '—' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="source">
-                {{ sessionBundlePreview.migrationMeta?.source ?? '—' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="activeProfile">
-                {{ sessionBundlePreview.migrationMeta?.activeProfile ?? '—' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="targetRun">
-                {{ sessionBundlePreview.targetRun?.name ?? '—' }} / {{ sessionBundlePreview.targetRun?.result?.backend ?? '—' }}
-              </el-descriptions-item>
-              <el-descriptions-item v-if="sessionBundlePreview.targetRun?.result?.legacyDebug" label="targetRun.legacy">
-                slice={{ sessionBundlePreview.targetRun.result.legacyDebug.hasSlice ? 'Y' : 'N' }},
-                export={{ sessionBundlePreview.targetRun.result.legacyDebug.hasExport ? 'Y' : 'N' }},
-                ready={{ sessionBundlePreview.targetRun.result.legacyDebug.ready ? 'Y' : 'N' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="diff条目">
-                {{ sessionBundlePreview.diff?.items?.length ?? 0 }}
-              </el-descriptions-item>
-              <el-descriptions-item label="diff日志">
-                {{ sessionBundlePreview.diff?.logs?.length ?? 0 }}
-              </el-descriptions-item>
-              <el-descriptions-item
-                v-if="sessionBundlePreview.migrationMeta?.engineHints?.targetGcodeSha256"
-                label="targetGcodeSha256"
-              >
-                <span style="font-family: monospace; font-size: 11px; word-break: break-all">
-                  {{ sessionBundlePreview.migrationMeta.engineHints.targetGcodeSha256 }}
-                </span>
-              </el-descriptions-item>
-              <el-descriptions-item
-                v-if="sessionBundlePreview.migrationMeta?.engineHints?.targetLegacyReady != null"
-                label="targetLegacyHint"
-              >
-                ready={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyReady ? 'Y' : 'N' }},
-                slice={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyHasSlice ? 'Y' : 'N' }},
-                export={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyHasExport ? 'Y' : 'N' }}
-                <span v-if="sessionBundlePreview.migrationMeta.engineHints.targetLegacyImportError" class="hint">
-                  ，import={{ sessionBundlePreview.migrationMeta.engineHints.targetLegacyImportError }}
-                </span>
-              </el-descriptions-item>
-            </el-descriptions>
-          </template>
+          </details>
         </div>
       </div>
-    </el-aside>
-  </el-container>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { loadPartMeshFromFile, toCamJobInputGeometry } from '@/core/mesh/loadPartMesh'
 import { useCamStore } from '@/stores/useCamStore'
 import { useCarveraStore } from '@/stores/useCarveraStore'
 import { useGridBotStore } from '@/stores/useGridBotStore'
+import { listStockCamDeviceIdsGrouped } from '@/core/cam/stock/stockCamDevices'
 import { runCamJob } from '@/api/cam'
 import { camGeometryMeshLabel, hydrateCamJobGeometry } from '@/core/cam/camGeometryPersist'
 import { loadCamLastRunPreview, saveCamLastRunPreview } from '@/core/cam/camLastRunPersist'
@@ -827,6 +1119,23 @@ import { clonePlain } from '@/core/clonePlain'
 import { useExportActions } from '@/composables/useExportActions'
 import { useFileImportActions } from '@/composables/useFileImportActions'
 import GcodePreviewPanel from '@/components/gcode/GcodePreviewPanel.vue'
+import {
+  createPathProgressAnimateBridge,
+  createLegacyCamAnimateSession,
+  makeLegacyAnimateToolRef,
+  type CamAnimateBridgeControls,
+  type LegacyCamAnimateSession,
+} from '@/core/cam/camAnimateBridge'
+import { createCamAnimateMeshHandle, type CamAnimateMeshHandle } from '@/core/cam/camAnimateMeshScene'
+import {
+  buildCamArrangeMesh,
+  disposeCamObject3D,
+  setCamArrangeMeshGhost,
+} from '@/core/cam/camArrangeMesh'
+import { createLaserOffOp, createLaserOnOp } from '@/core/cam/camLaserOps'
+import { getCachedGcodePathBuild } from '@/core/gcode/gcodePathBuildCache'
+import { WORKSPACE_EVENT } from '@/layouts/workspaceEvents'
+import type { Mesh } from 'three'
 
 const router = useRouter()
 const store = useCamStore()
@@ -837,6 +1146,272 @@ const { importJsonFromInput, importTextFromInput } = useFileImportActions()
 store.loadRecentRuns()
 
 const { device, tools, process, profiles, selectedProfileName, recentRuns } = storeToRefs(store)
+
+const stockCamGrouped = listStockCamDeviceIdsGrouped()
+const stockCamFeatured = stockCamGrouped.featured
+const stockCamOther = stockCamGrouped.other
+const stockCamDeviceId = ref<string>('')
+const camPhase = ref<'arrange' | 'slice' | 'preview' | 'animate' | 'export'>('arrange')
+const camPathProgress = ref(1)
+const camAnimatePlaying = ref(false)
+const camAnimateSpeed = ref(8)
+const camGcodePreviewRef = ref<{
+  getOrCreateAnimateStockGroup?: () => import('three').Group | null
+  clearAnimateStockGroup?: () => void
+  fitCameraToAnimateStock?: (padding?: number) => boolean
+} | null>(null)
+let camAnimateBridge: CamAnimateBridgeControls | null = null
+let camAnimateMeshHandle: CamAnimateMeshHandle | null = null
+let camLegacyAnimateSession: LegacyCamAnimateSession | null = null
+let camLegacyAnimateBusy = false
+let camLegacyAnimateTimer: ReturnType<typeof setInterval> | null = null
+let camArrangeMesh: Mesh | null = null
+
+function stopCamAnimatePlayback() {
+  if (camLegacyAnimateTimer != null) {
+    clearInterval(camLegacyAnimateTimer)
+    camLegacyAnimateTimer = null
+  }
+  camAnimateBridge?.pause()
+  camAnimateBridge?.dispose()
+  camAnimateBridge = null
+  camAnimatePlaying.value = false
+}
+
+function clearCamArrangeMeshOnly() {
+  if (camArrangeMesh) {
+    camArrangeMesh.parent?.remove(camArrangeMesh)
+    disposeCamObject3D(camArrangeMesh)
+    camArrangeMesh = null
+  }
+}
+
+function clearCamAnimateSessionOnly() {
+  camLegacyAnimateSession?.dispose()
+  camLegacyAnimateSession = null
+  camAnimateMeshHandle?.dispose()
+  camAnimateMeshHandle = null
+}
+
+function clearCamAnimateStockMesh() {
+  clearCamAnimateSessionOnly()
+  clearCamArrangeMeshOnly()
+  camGcodePreviewRef.value?.clearAnimateStockGroup?.()
+}
+
+/** Kiri arrange: show seated part mesh on platform (SLA/Laser pattern). */
+function showCamArrangeMesh(geometry: CamJobInputGeometry | null | undefined) {
+  clearCamAnimateSessionOnly()
+  clearCamArrangeMeshOnly()
+  const verts = geometry?.vertices
+  if (!verts?.length) return
+  const tryAdd = (attempt: number) => {
+    const group = camGcodePreviewRef.value?.getOrCreateAnimateStockGroup?.()
+    if (!group) {
+      if (attempt < 120) requestAnimationFrame(() => tryAdd(attempt + 1))
+      else ElMessage.warning('3D 视口未就绪，请稍后切换到 arrange 重试')
+      return
+    }
+    // Drop leftover animate children but keep group
+    while (group.children.length) {
+      const c = group.children.pop()!
+      group.remove(c)
+      disposeCamObject3D(c)
+    }
+    try {
+      camArrangeMesh = buildCamArrangeMesh(verts)
+      setCamArrangeMeshGhost(camArrangeMesh, false)
+      group.add(camArrangeMesh)
+      camGcodePreviewRef.value?.fitCameraToAnimateStock?.(2.4)
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('无法显示零件网格')
+    }
+  }
+  tryAdd(0)
+}
+
+function syntheticPrintFromGcode(gcode: string) {
+  const built = getCachedGcodePathBuild(gcode)
+  const toolRef = makeLegacyAnimateToolRef(1)
+  const pts: Array<{
+    tool: { getID: () => number }
+    point: { x: number; y: number; z: number }
+    emit: number
+  }> = []
+  const pos = built.positions
+  const n = Math.floor(pos.length / 3)
+  const step = Math.max(1, Math.floor(n / 120))
+  for (let i = 0; i < n; i += step) {
+    pts.push({
+      tool: toolRef,
+      point: { x: pos[i * 3]!, y: pos[i * 3 + 1]!, z: pos[i * 3 + 2]! },
+      emit: 1,
+    })
+  }
+  if (pts.length < 2) {
+    pts.push(
+      { tool: toolRef, point: { x: 0, y: 0, z: 5 }, emit: 1 },
+      { tool: toolRef, point: { x: 10, y: 10, z: 2 }, emit: 1 },
+    )
+  }
+  return { output: [pts] }
+}
+
+async function tryLoadCamAnimateStockMesh() {
+  clearCamAnimateStockMesh()
+  if (typeof SharedArrayBuffer === 'undefined') return
+  const gcode = camViewportGcode.value?.trim()
+  if (!gcode) return
+  const group = camGcodePreviewRef.value?.getOrCreateAnimateStockGroup?.()
+  if (!group) return
+
+  const stockX = Math.max(10, Number(process.value?.camStockX) || Number(device.value?.bedWidth) || 100)
+  const stockY = Math.max(10, Number(process.value?.camStockY) || Number(device.value?.bedDepth) || 100)
+  const stockZ = Math.max(1, Number(process.value?.camStockZ) || 20)
+
+  try {
+    camLegacyAnimateSession = await createLegacyCamAnimateSession({
+      mode: 'legacy-2d',
+      print: syntheticPrintFromGcode(gcode),
+      settings: {
+        stock: { x: stockX, y: stockY, z: stockZ },
+        tools: [
+          {
+            id: 1,
+            number: 1,
+            metric: true,
+            type: 'endmill',
+            name: 'animate-default',
+            flute_diam: 3.175,
+            flute_len: 20,
+            shaft_diam: 3.175,
+            shaft_len: 20,
+            taper_tip: 0,
+          },
+        ],
+        process: process.value
+          ? {
+              camOriginCenter: !!(process.value as { camOriginCenter?: boolean }).camOriginCenter,
+              camOriginTop: (process.value as { camOriginTop?: boolean }).camOriginTop !== false,
+            }
+          : undefined,
+        controller: { animesh: 4 },
+      },
+    })
+    camAnimateMeshHandle = createCamAnimateMeshHandle(group)
+    camAnimateMeshHandle.applyEvents(camLegacyAnimateSession.setupEvents)
+  } catch {
+    camLegacyAnimateSession = null
+  }
+}
+
+async function tickCamLegacyMaterialRemoval() {
+  if (!camLegacyAnimateSession || !camAnimateMeshHandle || camLegacyAnimateBusy) return
+  camLegacyAnimateBusy = true
+  try {
+    const events = await camLegacyAnimateSession.step({
+      speed: Math.max(2, camAnimateSpeed.value * 2),
+      steps: Infinity,
+      pause: 0,
+    })
+    camAnimateMeshHandle.applyEvents(events)
+    const p = camLegacyAnimateSession.getProgress()
+    if (p > 0) camPathProgress.value = p
+  } catch {
+    /* keep path-progress */
+  } finally {
+    camLegacyAnimateBusy = false
+  }
+}
+
+function startCamAnimatePlayback() {
+  stopCamAnimatePlayback()
+  if (!camViewportGcode.value?.trim()) return
+  camAnimateBridge = createPathProgressAnimateBridge({
+    getProgress: () => camPathProgress.value,
+    setProgress: (p) => {
+      camPathProgress.value = p
+    },
+    speed: camAnimateSpeed.value,
+  })
+  camAnimateBridge.play()
+  camAnimatePlaying.value = true
+  void tickCamLegacyMaterialRemoval()
+  camLegacyAnimateTimer = setInterval(() => {
+    if (!camAnimatePlaying.value) return
+    void tickCamLegacyMaterialRemoval()
+  }, Math.max(80, Math.round(400 / Math.max(1, camAnimateSpeed.value))))
+}
+
+function toggleCamAnimatePlayback() {
+  if (camAnimatePlaying.value) stopCamAnimatePlayback()
+  else startCamAnimatePlayback()
+}
+
+function onCamPathProgressInput(ev: Event) {
+  const v = Number((ev.target as HTMLInputElement).value)
+  camPathProgress.value = Math.max(0, Math.min(1, (Number.isFinite(v) ? v : 1000) / 1000))
+}
+
+function onCamArrangeClick() {
+  stopCamAnimatePlayback()
+  clearCamAnimateSessionOnly()
+  camPathProgress.value = 1
+  camPhase.value = 'arrange'
+  if (camPartGeometry.value) showCamArrangeMesh(camPartGeometry.value)
+}
+
+async function onCamSliceClick() {
+  stopCamAnimatePlayback()
+  clearCamAnimateSessionOnly()
+  setCamArrangeMeshGhost(camArrangeMesh, true)
+  camPathProgress.value = 1
+  camPhase.value = 'slice'
+  await onRunCamJob()
+}
+
+function onCamPreviewClick() {
+  stopCamAnimatePlayback()
+  clearCamAnimateSessionOnly()
+  setCamArrangeMeshGhost(camArrangeMesh, true)
+  camPathProgress.value = 1
+  camPhase.value = 'preview'
+}
+
+async function onCamAnimateClick() {
+  if (!camViewportGcode.value?.trim()) {
+    ElMessage.info('Generate or import G-code first')
+    return
+  }
+  camPhase.value = 'animate'
+  camPathProgress.value = 0
+  await tryLoadCamAnimateStockMesh()
+  startCamAnimatePlayback()
+}
+
+function onCamExportClick() {
+  stopCamAnimatePlayback()
+  clearCamAnimateSessionOnly()
+  setCamArrangeMeshGhost(camArrangeMesh, true)
+  camPathProgress.value = 1
+  camPhase.value = 'export'
+}
+
+function onStockCamDeviceChange(id: string) {
+  if (!id) return
+  if (!store.applyStockDevice(id)) {
+    ElMessage.warning(`未找到库存设备：${id}`)
+    return
+  }
+  ElMessage.success(`已应用库存设备：${id}`)
+}
+
+function onSelectCamProfile(name: string | number | boolean) {
+  const n = String(name ?? '')
+  if (!n) return
+  store.selectProfile(n)
+}
 
 const camResult = ref<CamJobResult | null>(null)
 const camRunInProgress = ref(false)
@@ -1075,9 +1650,49 @@ onMounted(() => {
     if (last) {
       camPartGeometry.value = last.geometry
       camResult.value = last.result
+      void nextTick(() => {
+        if (camPartGeometry.value?.vertices?.length) showCamArrangeMesh(camPartGeometry.value)
+      })
     }
   }
+  window.addEventListener(WORKSPACE_EVENT, onCamWorkspaceEvent as EventListener)
 })
+
+watch(camAnimateSpeed, () => {
+  if (camAnimatePlaying.value) startCamAnimatePlayback()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(WORKSPACE_EVENT, onCamWorkspaceEvent as EventListener)
+  stopCamAnimatePlayback()
+  clearCamAnimateStockMesh()
+})
+
+function onCamWorkspaceEvent(ev: Event) {
+  const detail = (ev as CustomEvent).detail as { action?: string; files?: File[] } | undefined
+  if (detail?.action !== 'import-files' || !detail.files?.length) return
+  const meshFile = detail.files.find((f) => /\.(stl|obj)$/i.test(f.name))
+  if (!meshFile) {
+    ElMessage.warning('CNC 请导入 STL / OBJ')
+    return
+  }
+  void (async () => {
+    try {
+      const mesh = await loadPartMeshFromFile(meshFile)
+      camPartGeometry.value = toCamJobInputGeometry(meshFile.name, mesh)
+      camResult.value = null
+      camPhase.value = 'arrange'
+      await nextTick()
+      showCamArrangeMesh(camPartGeometry.value)
+      ElMessage.success(
+        `${CAM_ACTION_SUCCESS.importedPartStlPrefix}${meshFile.name} · ${mesh.triangleCount} tris`,
+      )
+    } catch (err) {
+      console.error(err)
+      ElMessage.error(CAM_ACTION_ERROR.partStlParseFailed)
+    }
+  })()
+}
 
 watch(
   () => process.value?.ops,
@@ -1114,6 +1729,27 @@ function updateSelectedOpField<K extends keyof CamOperationInstance>(key: K, val
   const ops = localOps.value
   if (!ops || !ops[idx]) return
   ops[idx] = { ...ops[idx], [key]: value }
+}
+
+function ensureLocalOpsMutable(): CamOperationInstance[] {
+  if (!localOps.value) {
+    localOps.value = (process.value?.ops ?? []).map((op) => ({ ...op }))
+  }
+  return localOps.value
+}
+
+function addLaserOnOp() {
+  const ops = ensureLocalOpsMutable()
+  ops.push(createLaserOnOp())
+  selectedOpIndex.value = ops.length - 1
+  ElMessage.success('已添加 laser on（雕刻机激光附件）')
+}
+
+function addLaserOffOp() {
+  const ops = ensureLocalOpsMutable()
+  ops.push(createLaserOffOp())
+  selectedOpIndex.value = ops.length - 1
+  ElMessage.success('已添加 laser off')
 }
 
 function onLoadSample() {
@@ -1164,48 +1800,21 @@ function onPickCamPartStl() {
   camPartFileInputRef.value?.click()
 }
 
-function calcBbox(vertices: Float32Array) {
-  let minX = Infinity
-  let minY = Infinity
-  let minZ = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  let maxZ = -Infinity
-  for (let i = 0; i < vertices.length; i += 3) {
-    const x = vertices[i] ?? 0
-    const y = vertices[i + 1] ?? 0
-    const z = vertices[i + 2] ?? 0
-    if (x < minX) minX = x
-    if (y < minY) minY = y
-    if (z < minZ) minZ = z
-    if (x > maxX) maxX = x
-    if (y > maxY) maxY = y
-    if (z > maxZ) maxZ = z
-  }
-  return { minX, minY, minZ, maxX, maxY, maxZ }
-}
-
 async function onCamPartFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
   try {
-    const buf = await file.arrayBuffer()
-    const loader = new STLLoader()
-    const geometry = loader.parse(buf)
-    const attr = geometry.getAttribute('position')
-    const arr = attr.array as ArrayLike<number>
-    const verts = new Float32Array(arr.length)
-    for (let i = 0; i < arr.length; i += 1) verts[i] = arr[i] ?? 0
-    const bbox = calcBbox(verts)
-    camPartGeometry.value = {
-      id: file.name,
-      bbox,
-      vertices: verts,
-      complexityHint: Math.max(1, Math.floor(verts.length / 9)),
-    }
+    const mesh = await loadPartMeshFromFile(file)
+    camPartGeometry.value = toCamJobInputGeometry(file.name, mesh)
     camResult.value = null
-    ElMessage.success(`${CAM_ACTION_SUCCESS.importedPartStlPrefix}${file.name}`)
+    camPhase.value = 'arrange'
+    await nextTick()
+    showCamArrangeMesh(camPartGeometry.value)
+    const scaleNote = mesh.scaledFromMeters ? '（已米→毫米缩放）' : ''
+    ElMessage.success(
+      `${CAM_ACTION_SUCCESS.importedPartStlPrefix}${file.name} · ${mesh.format.toUpperCase()} · ${mesh.triangleCount} tris${scaleNote}`,
+    )
   } catch (err) {
     console.error(err)
     ElMessage.error(CAM_ACTION_ERROR.partStlParseFailed)
@@ -1257,6 +1866,8 @@ async function onImportSessionBundlePreview(event: Event) {
       sessionBundlePreview.value = preview
       if (preview.targetRun?.geometry) {
         camPartGeometry.value = preview.targetRun.geometry
+        camPhase.value = 'arrange'
+        void nextTick(() => showCamArrangeMesh(camPartGeometry.value))
       }
       if (preview.targetRun?.result) {
         camResult.value = preview.targetRun.result as CamJobResult
@@ -1646,6 +2257,8 @@ function onLoadRecentRun(id: string) {
   localOps.value = hit.profile.process.ops ? hit.profile.process.ops.map((op) => ({ ...op })) : null
   camPartGeometry.value = hydrateCamJobGeometry(hit.geometry)
   camResult.value = hit.result
+  camPhase.value = 'arrange'
+  void nextTick(() => showCamArrangeMesh(camPartGeometry.value))
   ElMessage.success(CAM_ACTION_SUCCESS.loadedRunSnapshot)
 }
 
@@ -1865,45 +2478,55 @@ async function onSaveRecentRunAsProfile(id: string) {
 </script>
 
 <style scoped>
-.cam-root {
-  height: calc(100vh - 60px);
+.km-panel-left {
+  width: 300px;
+  max-width: 36vw;
 }
-.cam-aside,
-.cam-aside-right {
-  background: #fff;
-  border-right: 1px solid #dcdfe6;
+.km-panel-right {
+  width: 360px;
+  max-width: 42vw;
 }
-.cam-aside-right {
-  border-left: 1px solid #dcdfe6;
-  border-right: none;
+.km-canvas-host :deep(.gcode-preview-panel--cam) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding-top: 36px;
 }
-.cam-center {
-  background: #f5f7fa;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+.cam-anim-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 14px;
+  z-index: 20;
 }
-.cam-main {
-  padding: 12px;
+.km-canvas-host :deep(.gcode-preview-panel__toolbar) {
+  background: rgba(245, 245, 245, 0.88);
+  border-bottom: 1px solid var(--km-border, #ddd);
+  pointer-events: all;
 }
-.cam-main-center {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.pane-title {
-  padding: 10px 12px;
+.km-set-subheader {
   font-weight: 600;
-  border-bottom: 1px solid #ebeef5;
+  font-size: 12px;
+  margin: 4px 0;
+  color: #555;
 }
-.pane-body {
-  padding: 12px;
+.cam-run-float {
+  pointer-events: all;
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  min-width: 240px;
+  padding: 8px 12px;
+  background: rgba(245, 245, 245, 0.94);
+  border: 1px solid var(--km-border, #ddd);
+  border-radius: 4px;
 }
 .hint {
   color: #909399;
+  font-size: 12px;
 }
 .tool-list,
 .ops-list {

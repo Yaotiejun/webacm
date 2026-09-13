@@ -1,6 +1,12 @@
 import { createServer } from 'node:http'
-import { WebSocketServer } from 'ws'
+import { WebSocketServer, type WebSocket } from 'ws'
 import net from 'node:net'
+import {
+  createCarveraMockSession,
+  createCarveraTcpSession,
+  type CarveraBridgeEvent,
+  type CarveraSession,
+} from './carvera/session.js'
 
 const PORT = Number(process.env.PORT ?? 9999)
 
@@ -77,6 +83,7 @@ type CarveraConnStats = {
   maxQueueLen: number
   backend: 'mock' | 'tcp'
   tcpConnected: boolean
+  uploads: number
 }
 
 type GridbotConnStats = {
@@ -161,7 +168,7 @@ const gridbotConns = new Map<number, GridbotConnStats>()
 
 function logStats() {
   const carveraSummary = Array.from(carveraConns.values()).map((s) =>
-    `${s.prefix} backend=${s.backend} tcp=${s.tcpConnected} q=${s.maxQueueLen} enq=${s.enqueued} ack=${s.acked} drop=${s.dropped}`,
+    `${s.prefix} backend=${s.backend} tcp=${s.tcpConnected} q=${s.maxQueueLen} enq=${s.enqueued} ack=${s.acked} drop=${s.dropped} up=${s.uploads}`,
   )
   const gridbotSummary = Array.from(gridbotConns.values()).map((s) =>
     `${s.prefix} backend=${s.backend} tcp=${s.tcpConnected} cmds=${s.commands} m114=${s.m114} tempSets=${s.tempSets}`,
@@ -174,85 +181,16 @@ function logStats() {
 
 setInterval(logStats, 10_000)
 
-function createCarveraMockBackend(prefix: string, stats: CarveraConnStats, send: (line: string) => void): LineBackend {
-  const pending: { cmd: string; enqAt: number }[] = []
-  let t = 0
-  let alarmed = false
-
-  try {
-    send("Grbl 1.1h ['$' for help]")
-  } catch {
-    // ignore
+function sendCarveraEvent(ws: WebSocket, ev: CarveraBridgeEvent | string) {
+  if (typeof ev === 'string') {
+    ws.send(`${ev}\n`)
+    return
   }
-
-  const posTimer = setInterval(() => {
-    t += 1
-    const x = (Math.sin(t / 10) * 10).toFixed(3)
-    const y = (Math.cos(t / 10) * 10).toFixed(3)
-    const z = (Math.sin(t / 25) * 2).toFixed(3)
-
-    try {
-      send(`X${x} Y${y} Z${z}`)
-    } catch {
-      // ignore
-    }
-  }, 200)
-
-  const ackTimer = setInterval(() => {
-    if (!pending.length) return
-    const now = Date.now()
-    const item = pending.shift()!
-    const waited = now - item.enqAt
-    if (waited > 2000) {
-      console.warn(`${prefix} WARN: command waited ${waited}ms in queue`, item.cmd)
-    }
-
-    const cmd = item.cmd.trim()
-
-    try {
-      if (/^(\$|\?)\S+/i.test(cmd)) {
-        send('error:2')
-      } else if (!alarmed && /\$H\b/i.test(cmd)) {
-        alarmed = true
-        send('ALARM:9')
-      } else if (cmd === '?' || cmd.toLowerCase() === 'status') {
-        send(
-          '<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0,100|S:0,10000,100,0|L:0,255,100,0|W:3.300|P:0,0,0|A:0|H:0|Buf:15>',
-        )
-        send('ok')
-      } else if (cmd === '$$') {
-        send('$0=10')
-        send('$1=25')
-        send('ok')
-      } else {
-        send('ok')
-      }
-
-      stats.acked += 1
-      console.log(`${prefix} ack`, item.cmd)
-    } catch {
-      // ignore
-    }
-  }, 50)
-
-  return {
-    onClientLine(line: string) {
-      console.log(`${prefix} in`, line)
-      if (!line) return
-      if (pending.length > 200) {
-        stats.dropped += 1
-        console.log(`${prefix} queue full, dropping`, line)
-        return
-      }
-      pending.push({ cmd: line, enqAt: Date.now() })
-      stats.enqueued += 1
-      if (pending.length > stats.maxQueueLen) stats.maxQueueLen = pending.length
-    },
-    dispose() {
-      clearInterval(posTimer)
-      clearInterval(ackTimer)
-    },
+  if (ev.type === 'line') {
+    ws.send(`${ev.line}\n`)
+    return
   }
+  ws.send(`${JSON.stringify(ev)}\n`)
 }
 
 function parseGridbotLineNo(line: string): number | null {
@@ -276,19 +214,39 @@ function createGridbotMockBackend(prefix: string, stats: GridbotConnStats, send:
   let bedTarget = 60
   let bufFree = 16
   let plnFree = 16
+  let pos = { x: 0, y: 0, z: 0, e: 0 }
+  let absolute = true
+  let mockResendOnce = process.env.GRIDBOT_MOCK_RESEND === '1'
+  let resendFired = false
 
   const timer = setInterval(() => {
     t += 1
-    const nozzle = 200 + Math.sin(t / 20) * 5
-    const bed = 60
+    const nozzle = Math.min(nozzleTarget, 200 + Math.sin(t / 20) * 5)
+    const bed = Math.min(bedTarget, 60)
 
     try {
-      send(`ok T:${nozzle.toFixed(1)} /${nozzleTarget.toFixed(1)} B:${bed.toFixed(1)} /${bedTarget.toFixed(1)}`)
-      send('X:0.00 Y:0.00 Z:0.00 E:0.00')
+      send(
+        `ok T:${nozzle.toFixed(1)} /${nozzleTarget.toFixed(1)} B:${bed.toFixed(1)} /${bedTarget.toFixed(1)}`,
+      )
+      send(
+        `X:${pos.x.toFixed(2)} Y:${pos.y.toFixed(2)} Z:${pos.z.toFixed(2)} E:${pos.e.toFixed(2)}`,
+      )
     } catch {
       // ignore
     }
   }, 1500)
+
+  function applyMove(body: string) {
+    const axisRe = /([XYZE])\s*(-?\d+(?:\.\d+)?)/gi
+    let m: RegExpExecArray | null
+    while ((m = axisRe.exec(body))) {
+      const axis = m[1]!.toUpperCase() as 'X' | 'Y' | 'Z' | 'E'
+      const v = Number(m[2])
+      if (!Number.isFinite(v)) continue
+      const key = axis.toLowerCase() as 'x' | 'y' | 'z' | 'e'
+      pos[key] = absolute ? v : pos[key] + v
+    }
+  }
 
   return {
     onClientLine(line: string) {
@@ -310,15 +268,44 @@ function createGridbotMockBackend(prefix: string, stats: GridbotConnStats, send:
       try {
         const body = gridbotCommandBody(line)
 
+        if (/^G90\b/i.test(body)) {
+          absolute = true
+          send('ok')
+          return
+        }
+        if (/^G91\b/i.test(body)) {
+          absolute = false
+          send('ok')
+          return
+        }
+        if (/^G0\b|^G1\b|^G28\b/i.test(body)) {
+          if (/^G28\b/i.test(body)) {
+            pos = { x: 0, y: 0, z: 0, e: pos.e }
+          } else {
+            applyMove(body)
+          }
+        }
+
         if (/^M114\b/i.test(body)) {
           stats.m114 += 1
-          send('X:0.00 Y:0.00 Z:0.00 E:0.00')
+          send(
+            `X:${pos.x.toFixed(2)} Y:${pos.y.toFixed(2)} Z:${pos.z.toFixed(2)} E:${pos.e.toFixed(2)}`,
+          )
           send('ok')
           return
         }
 
         if (/^M105\b/i.test(body)) {
-          send(`ok T:${nozzleTarget.toFixed(1)} /${nozzleTarget.toFixed(1)} B:${bedTarget.toFixed(1)} /${bedTarget.toFixed(1)}`)
+          send(
+            `ok T:${nozzleTarget.toFixed(1)} /${nozzleTarget.toFixed(1)} B:${bedTarget.toFixed(1)} /${bedTarget.toFixed(1)}`,
+          )
+          return
+        }
+
+        if (mockResendOnce && !resendFired && /^N\d+/i.test(line.trim())) {
+          resendFired = true
+          send('Resend: 1')
+          send('ok')
           return
         }
 
@@ -355,39 +342,48 @@ carveraWss.on('connection', (ws, req) => {
     maxQueueLen: 0,
     backend: 'mock',
     tcpConnected: false,
+    uploads: 0,
   }
   carveraConns.set(id, stats)
 
   const carveraBackendKind = process.env.CARVERA_BACKEND ?? 'mock'
   const carveraTcpTarget = parseTcpTarget(process.env.CARVERA_TCP)
 
-  const backend: LineBackend =
+  const sendEv = (ev: CarveraBridgeEvent | string) => {
+    try {
+      if (typeof ev !== 'string' && ev.type === 'uploaded') stats.uploads += 1
+      if (typeof ev !== 'string' && ev.type === 'line' && ev.line === 'ok') stats.acked += 1
+      sendCarveraEvent(ws, ev)
+    } catch {
+      // ignore
+    }
+  }
+
+  const session: CarveraSession =
     carveraBackendKind === 'tcp' && carveraTcpTarget
       ? (() => {
           stats.backend = 'tcp'
-          return createTcpLineBackend(prefix, carveraTcpTarget, (line) => {
-            ws.send(`${line}\n`)
-          }, (connected) => {
-            stats.tcpConnected = connected
-          })
+          stats.tcpConnected = true
+          return createCarveraTcpSession(prefix, carveraTcpTarget, sendEv)
         })()
       : (() => {
           stats.backend = 'mock'
-          return createCarveraMockBackend(prefix, stats, (line) => {
-            ws.send(`${line}\n`)
-          })
+          return createCarveraMockSession(prefix, sendEv)
         })()
 
-  ws.on('message', (data) => {
-    const text = typeof data === 'string' ? data : data.toString('utf8')
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-    for (const line of lines) {
-      backend.onClientLine(line)
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
+      session.onClientBinary(buf)
+      return
     }
+    const text = typeof data === 'string' ? data : Buffer.from(data as Buffer).toString('utf8')
+    stats.enqueued += 1
+    session.onClientText(text)
   })
 
   ws.on('close', () => {
-    backend.dispose()
+    session.dispose()
     carveraConns.delete(id)
     console.log(`${prefix} disconnected`)
   })

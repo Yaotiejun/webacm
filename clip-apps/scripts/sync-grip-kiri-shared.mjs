@@ -9,9 +9,13 @@
 import { cpSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveGripPackagePath } from './resolve-grip-root.mjs'
 
 const clipApps = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const gripSrc = path.resolve(clipApps, '..', '..', 'grip', 'grid-apps-master', 'src')
+const gripPkg = resolveGripPackagePath('grid-apps-master')
+const gripSrc = gripPkg
+  ? path.join(gripPkg, 'src')
+  : path.resolve(clipApps, '..', '..', 'grip', 'grid-apps-master', 'src')
 const legacyRoot = path.join(clipApps, 'src', 'core', 'slicer', 'legacy')
 
 const copies = [
@@ -21,6 +25,7 @@ const copies = [
 
 if (!existsSync(gripSrc)) {
   console.error('[sync-grip-kiri-shared] grip source not found:', gripSrc)
+  console.error('Set GRIP_ROOT or place grid-apps-master under Kiri-Moto/')
   process.exit(1)
 }
 

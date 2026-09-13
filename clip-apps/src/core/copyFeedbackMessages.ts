@@ -40,7 +40,8 @@ export const CAM_ACTION_SUCCESS = {
   loadedSampleProfile: '已加载示例 CAM 配置（device/tools/process）',
   clonedProfile: '已克隆为新 profile',
   resetProfileEmpty: '已重置 CAM 配置为空',
-  importedPartStlPrefix: '已导入工件 STL：',
+  importedPartStlPrefix: '已导入工件：',
+  importedPartStlPrefixLegacy: '已导入工件 STL：',
   runCamJobPrefix: '已运行 CAM 刀路生成（backend=',
   savedCarveraJobLocal: '已保存为 Carvera Job（仅本机浏览器）',
   savedGridBotJobLocal: '已保存为 GridBot Job（仅本机浏览器）',
@@ -68,7 +69,7 @@ export const CAM_ACTION_WARNING = {
 
 export const CAM_ACTION_ERROR = {
   sessionBundleGcodeShaMismatch: 'G-code SHA256 与 migrationMeta 不一致（内容或规范化规则已变化）',
-  partStlParseFailed: '工件 STL 解析失败',
+  partStlParseFailed: '工件 STL/OBJ 解析失败',
   runCamJobFailed: 'CAM 刀路生成失败',
   exportFailedPrefix: '导出失败：',
 } as const

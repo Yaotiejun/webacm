@@ -1,6 +1,7 @@
 import type { SliceResult, SlicePreviewData, SliceLayerPreview, SlicePath2D, SliceInputMeta } from '@/api/slice'
 import { computeVertexBounds3D, type VertexBounds3D } from '@/core/slicer/geometry'
 import { estimateSummaryFromPreview, syncSliceSummaryTimeFromEstimateMeta } from '@/core/slicer/previewEstimate'
+import { buildFdmGcodeFromPreview } from '@/core/slicer/fdmExportGcodeFromPreview'
 import type { SliceJobPayload } from '@/types/job'
 import type { FdmProcess } from '@/types/process'
 
@@ -131,5 +132,17 @@ export function buildMockSliceResult(job: SliceJobPayload, proc: FdmProcess, ver
     : DEFAULT_PLANAR_BOUNDS
   const preview = buildMockPreview(bounds, proc, layersCount)
   const summary = syncSliceSummaryTimeFromEstimateMeta(estimateSummaryFromPreview(preview.layers, proc))
-  return { summary, preview, inputMeta: vertices?.length ? buildSliceInputMeta(vertices) : undefined, fallback: null }
+  const exported = buildFdmGcodeFromPreview(preview, {
+    process: proc,
+    deviceName: job.device,
+    jobName: job.name,
+  })
+  return {
+    summary,
+    preview,
+    inputMeta: vertices?.length ? buildSliceInputMeta(vertices) : undefined,
+    fallback: null,
+    gcodeText: exported.gcodeText,
+    gcodeSource: 'mock',
+  }
 }

@@ -18,6 +18,8 @@ describe('migrationSoakManifest', () => {
     expect(scripts[MIGRATION_SOAK_SCRIPTS.ordered]).toContain('migration-ordered-soak')
     expect(scripts[MIGRATION_SOAK_SCRIPTS.gates]).toContain('migrationProductGates.spec')
     expect(scripts[MIGRATION_SOAK_SCRIPTS.offline]).toContain('migrationProductGates')
+    expect(scripts[MIGRATION_SOAK_SCRIPTS.laser]).toContain('laserGolden.soak')
+    expect(scripts[MIGRATION_SOAK_SCRIPTS.sla]).toContain('slaGolden.soak')
     expect(scripts[MIGRATION_CI_SCRIPTS.ci]).toContain('ci-migration')
   })
 

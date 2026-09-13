@@ -38,4 +38,16 @@ test.describe('migration workspaces smoke', () => {
     await page.goto('/fdm')
     await expect(page.getByRole('button', { name: '切片' })).toBeVisible()
   })
+
+  test('laser workspace loads import and slice controls', async ({ page }) => {
+    await page.goto('/laser')
+    await expect(page.getByRole('button', { name: /导入 SVG\/DXF/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'slice' })).toBeVisible()
+  })
+
+  test('sla workspace loads import and slice controls', async ({ page }) => {
+    await page.goto('/sla')
+    await expect(page.getByRole('button', { name: /Import STL\/OBJ/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'slice' })).toBeVisible()
+  })
 })

@@ -9,7 +9,7 @@ export const routes: RouteRecordRaw[] = [
     path: '/',
     component: MainLayout,
     children: [
-      { path: '', redirect: '/settings' },
+      { path: '', redirect: '/fdm' },
       { path: 'settings', component: SettingsView },
       { path: 'fdm', component: () => import('@/views/fdm/FdmView.vue') },
       { path: 'config/fdm', component: () => import('@/views/config/FdmCurrentConfigView.vue') },
@@ -25,6 +25,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'raster', component: () => import('@/views/raster/RasterView.vue') },
       { path: 'texturizer', component: () => import('@/views/texturizer/TexturizerView.vue') },
       { path: 'cam', component: () => import('@/views/cam/CamView.vue') },
+      { path: 'laser', component: () => import('@/views/laser/LaserView.vue') },
+      { path: 'sla', component: () => import('@/views/sla/SlaView.vue') },
     ],
   },
 ]

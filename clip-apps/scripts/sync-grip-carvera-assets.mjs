@@ -6,14 +6,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { writeCarveraMtl } from './carvera-mtl-generate.mjs'
+import { resolveGripPackagePath } from './resolve-grip-root.mjs'
 
 const clipRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const src = path.resolve(clipRoot, '../../grip/carve-control-main/web/carvera.obj')
+const carveRoot = resolveGripPackagePath('carve-control-main')
+const src = carveRoot
+  ? path.join(carveRoot, 'web', 'carvera.obj')
+  : path.resolve(clipRoot, '../../grip/carve-control-main/web/carvera.obj')
 const outDir = path.join(clipRoot, 'public', 'carvera')
 const dest = path.join(outDir, 'carvera.obj')
 
 if (!fs.existsSync(src)) {
   console.error('[sync-grip-carvera-assets] missing:', src)
+  console.error('Set GRIP_ROOT or use Kiri-Moto/carve-control-main')
   process.exit(1)
 }
 

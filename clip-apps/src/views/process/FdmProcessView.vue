@@ -157,26 +157,92 @@
           <el-divider content-position="left">填充</el-divider>
           <el-row :gutter="16">
             <el-col :span="8">
-              <el-form-item label="填充密度">
-                <el-input-number v-model="form.sliceFillSparse" :min="0" :max="1" :step="0.01" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
               <el-form-item label="填充类型">
                 <el-select v-model="form.sliceFillType" style="width: 100%">
                   <el-option label="无" value="none" />
                   <el-option label="grid" value="grid" />
                   <el-option label="linear" value="linear" />
                   <el-option label="hex" value="hex" />
+                  <el-option label="triangle" value="triangle" />
+                  <el-option label="gyroid" value="gyroid" />
+                  <el-option label="花瓶 (vase)" value="vase" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="8">
+              <el-form-item label="填充密度">
+                <el-input-number
+                  v-model="form.sliceFillSparse"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :disabled="form.sliceFillType === 'none' || form.sliceFillType === 'vase'"
+                />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
               <el-form-item label="填充重叠">
-                <el-input-number v-model="form.sliceFillOverlap" :min="0" :max="1" :step="0.01" />
+                <el-input-number
+                  v-model="form.sliceFillOverlap"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :disabled="form.sliceFillType === 'none' || form.sliceFillType === 'vase'"
+                />
               </el-form-item>
             </el-col>
           </el-row>
+          <el-row :gutter="16">
+            <el-col :span="8">
+              <el-form-item label="支撑模式">
+                <el-select v-model="form.sliceSupportType" placeholder="automatic">
+                  <el-option label="automatic" value="automatic" />
+                  <el-option label="manual (paint)" value="manual" />
+                  <el-option label="disabled" value="disabled" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="支撑挤出机">
+                <el-input-number v-model="form.sliceSupportNozzle" :min="0" :max="15" :step="1" />
+                <div class="hint">多挤出时支撑喷嘴索引</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-divider content-position="left">皮带机 (belt)</el-divider>
+          <el-row :gutter="16">
+            <el-col :span="8">
+              <el-form-item label="切片倾角 °">
+                <el-input-number v-model="form.sliceAngle" :min="0" :max="90" :step="1" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="beltAnchor">
+                <el-input-number v-model="form.beltAnchor" :min="0" :max="50" :step="0.5" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="firstLayerBeltLead">
+                <el-input-number v-model="form.firstLayerBeltLead" :min="0" :max="50" :step="0.5" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="8">
+              <el-form-item label="firstLayerBeltBump">
+                <el-input-number v-model="form.firstLayerBeltBump" :min="0" :max="10" :step="0.5" />
+                <div class="hint">锚点 bump 高度 (mm)</div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="firstLayerBeltFact">
+                <el-input-number v-model="form.firstLayerBeltFact" :min="0" :max="2" :step="0.05" />
+                <div class="hint">首层挤出倍率</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <div class="hint" style="margin-bottom: 8px">仅当设备 bedBelt=true（如 Creality.CR-30）时生效。</div>
 
           <el-divider content-position="left">回抽 / 风扇</el-divider>
           <el-row :gutter="16">
@@ -201,6 +267,14 @@
             <el-col :span="12">
               <el-form-item label="开启层">
                 <el-input-number v-model="form.outputFanLayer" :min="0" :max="200" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="清洗塔 (purge)">
+                <el-input-number v-model="form.outputPurgeTower" :min="0" :max="1000" :step="1" />
+                <div class="hint">Kiri outputPurgeTower；0 关闭；多挤出时建议 &gt; 0</div>
               </el-form-item>
             </el-col>
           </el-row>
@@ -460,6 +534,14 @@ const form = reactive<FdmProcess>({
   sliceSupportXYExpand: 0,
   sliceSupportInterfaceLayers: 0,
   sliceSupportOutlineOnly: false,
+  sliceSupportNozzle: 0,
+  sliceSupportType: 'automatic',
+  outputPurgeTower: 0,
+  sliceAngle: 45,
+  beltAnchor: 0,
+  firstLayerBeltLead: 0,
+  firstLayerBeltBump: 0,
+  firstLayerBeltFact: 1,
   sliceDetectThin: 1,
   sliceCompInner: 0,
   sliceCompOuter: 0,

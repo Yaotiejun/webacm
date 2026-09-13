@@ -4,6 +4,7 @@ import type { CamJobInputGeometry, CamJobResult } from '@/types/camJob'
 import defaultDeviceJson from '@/core/cam/defaults/kiri-cam-device.json'
 import defaultToolsJson from '@/core/cam/defaults/kiri-cam-tools.json'
 import defaultProcessJson from '@/core/cam/defaults/kiri-cam-process.json'
+import { getStockCamDevice } from '@/core/cam/stock/stockCamDevices'
 import { canonicalizeCamProcessConfig } from '@/core/cam/camJobSummaryBridge'
 import { hydrateCamJobGeometry, serializeCamJobGeometry } from '@/core/cam/camGeometryPersist'
 import { clonePlain } from '@/core/clonePlain'
@@ -123,6 +124,24 @@ export const useCamStore = defineStore('cam', {
       this.profiles = [profile]
       this.selectedProfileName = profile.name
       this.applyProfile(profile)
+    },
+    /** Swap only the device block from bundled Kiri CAM stock JSON. */
+    applyStockDevice(stockId: string) {
+      const stock = getStockCamDevice(stockId)
+      if (!stock) return false
+      if (!this.device) this.loadSample()
+      this.device = clonePlain(stock)
+      if (this.selectedProfileName) {
+        const idx = this.profiles.findIndex((p) => p.name === this.selectedProfileName)
+        if (idx >= 0) {
+          const cur = this.profiles[idx]!
+          this.profiles.splice(idx, 1, {
+            ...cur,
+            device: clonePlain(stock),
+          })
+        }
+      }
+      return true
     },
     applyProfile(profile: CamProfile) {
       this.device = clonePlain(profile.device) as CamDeviceConfig

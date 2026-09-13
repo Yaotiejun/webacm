@@ -2,11 +2,11 @@ import type { DeviceSummary, FdmDevice } from '@/types/device'
 import type { AppSettings } from '@/types/settings'
 import { getSettings, saveSettings } from '@/api/settings'
 import { tryParseWsSettingsRecord } from '@/api/wsSettingsRecord'
-
-// 预置的内置设备列表名称（来自旧项目 devlist[fdm] 的 keys，先简单写几个占位）
-const stockFdmDevices: string[] = [
-  'Any.Generic.Marlin',
-]
+import {
+  getStockFdmDevice,
+  listStockFdmDeviceIds,
+  resolveStockFdmDeviceId,
+} from '@/core/slicer/stock/fdm/stockFdmDevices'
 
 export interface FdmDeviceList {
   stock: DeviceSummary[]
@@ -16,7 +16,6 @@ export interface FdmDeviceList {
 export async function listFdmDevices(): Promise<FdmDeviceList> {
   const settings = await getSettingsFromWs()
   const mode = 'FDM'
-  const filterName = settings.filter?.[mode] ?? 'Any.Generic.Marlin'
   const devices = settings.devices ?? {}
 
   const local: DeviceSummary[] = Object.keys(devices).map((name) => ({
@@ -25,16 +24,23 @@ export async function listFdmDevices(): Promise<FdmDeviceList> {
     isLocal: true,
   }))
 
-  const stock: DeviceSummary[] = stockFdmDevices.map((name) => ({
+  const stock: DeviceSummary[] = listStockFdmDeviceIds().map((name) => ({
     name,
     mode,
     isLocal: false,
   }))
 
-  return {
-    stock,
-    local,
+  return { stock, local }
+}
+
+/** Resolve local override first, then bundled stock JSON. */
+export async function getFdmDevice(name: string): Promise<FdmDevice | null> {
+  const settings = await getSettingsFromWs()
+  const local = settings.devices?.[name] as FdmDevice | undefined
+  if (local && typeof local === 'object' && local.bedWidth != null) {
+    return local
   }
+  return getStockFdmDevice(resolveStockFdmDeviceId(name))
 }
 
 export async function addLocalFdmDeviceFromCurrent(name: string): Promise<void> {
@@ -61,15 +67,12 @@ export async function deleteLocalFdmDevice(name: string): Promise<void> {
 }
 
 async function getSettingsFromWs(): Promise<any> {
-  // 我们当前的 getSettings 返回的是 AppSettings，只包含 controller。
-  // 为了与 ws-settings 对齐，这里直接从 localStorage 读原始结构（如果存在）。
   if (typeof window === 'undefined') {
     return {} as any
   }
   const raw = window.localStorage.getItem('ws-settings')
   if (!raw) {
     const base: any = (await getSettings()) as AppSettings
-    // 填补 devices/filter 结构
     return {
       ...base,
       mode: 'FDM',

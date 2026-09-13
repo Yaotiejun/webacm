@@ -19,7 +19,8 @@ describe('slicer.kiriLegacyBridge', () => {
       },
       workerScope: scope,
     })
-    expect(out.bounds.maxX).toBe(10)
+    // Bounds come from slice paths (+ Kiri-style pad), not mesh AABB.
+    expect(out.bounds.maxX).toBe(10.5)
     expect(out.layers.length).toBe(1)
     expect(scope.kiri_worker).toEqual({ old: true })
   })

@@ -37,6 +37,7 @@ function makeProcess(): FdmProcess {
     brimOffset: 0.2,
     enableRaft: true,
     raftSpacing: 0.15,
+    outputPurgeTower: 64,
     ranges: [{ fromLayer: 1, toLayer: 10, outputTemp: 205 }],
   }
 }
@@ -46,6 +47,7 @@ describe('slicer.kiriSettingsAdapter', () => {
     const legacy = toKiriLegacyProcess(makeProcess())
     expect(legacy.sliceSupportGap).toBeUndefined()
     expect(legacy.firstLayerBrim).toBe(2)
+    expect(legacy.outputPurgeTower).toBe(64)
     expect(Array.isArray(legacy.ranges)).toBe(true)
   })
 

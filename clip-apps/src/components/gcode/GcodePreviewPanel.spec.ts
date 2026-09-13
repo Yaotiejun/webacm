@@ -34,4 +34,15 @@ describe('GcodePreviewPanel', () => {
     expect(wrapper.text()).toContain('G1/G2/G3')
     expect(wrapper.find('canvas.gcode-preview-panel__canvas').exists()).toBe(true)
   })
+
+  it('allows omitting toolPosition and stemColor (Laser-style)', () => {
+    const wrapper = mount(GcodePreviewPanel, {
+      props: {
+        kind: 'cam',
+        layout: 'cam',
+        jobGcode: '',
+      },
+    })
+    expect(wrapper.find('canvas.gcode-preview-panel__canvas').exists()).toBe(true)
+  })
 })

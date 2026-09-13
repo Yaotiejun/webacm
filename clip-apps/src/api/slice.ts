@@ -32,6 +32,8 @@ export interface SliceLegacyDebugSnapshot {
   ready: boolean
   initErrorMessage: string | null
   hasSliceImpl: boolean
+  hasPrepareImpl?: boolean
+  hasExportImpl?: boolean
   legacyImportErrorMessage: string | null
 }
 
@@ -77,6 +79,13 @@ export interface SliceResult {
   preview: SlicePreviewData
   inputMeta?: SliceInputMeta
   backend?: SliceBackendKind
+  /**
+   * Machine-oriented G-code when available (legacy preview-path export or future fdm_export).
+   * Prefer this for export / device send over UI-built stubs.
+   */
+  gcodeText?: string
+  /** How `gcodeText` was produced. */
+  gcodeSource?: 'legacy-preview-path' | 'placeholder-empty' | 'legacy-fdm-export' | 'mock'
   /** Present when slice ran in worker with `kiriEngine` (Kiri path or mock fallback after Kiri attempt). */
   legacyDebug?: SliceLegacyDebugSnapshot
   fallback?: {
@@ -90,6 +99,12 @@ const SlicerWorkerURL = new URL('../workers/slicer.worker.ts', import.meta.url)
 
 import type { SliceBackendKind } from '@/api/slice-backend'
 import type { SliceFallbackTelemetryEvent } from '@/core/slicer/sliceTelemetry'
+import {
+  normalizeSliceModelMeshes,
+  type SliceGeometryInput,
+} from '@/core/slicer/sliceModelMeshes'
+
+export type { SliceGeometryInput, SliceModelMesh } from '@/core/slicer/sliceModelMeshes'
 
 export type SliceTelemetryEvent = SliceFallbackTelemetryEvent
 
@@ -121,6 +136,7 @@ export function sanitizeJobForWorker(job: SliceJobPayload): SliceJobPayload {
       ext: m.ext,
       transform: clonePlain(m.transform),
       bbox: clonePlain(m.bbox),
+      extruder: Number.isFinite(m.extruder) ? Math.max(0, Math.floor(Number(m.extruder))) : 0,
     })),
     jobBounds: job.jobBounds ? clonePlain(job.jobBounds) : undefined,
   }
@@ -128,7 +144,7 @@ export function sanitizeJobForWorker(job: SliceJobPayload): SliceJobPayload {
 
 export async function submitSliceJob(
   job: SliceJobPayload,
-  vertices: Float32Array,
+  geometry: SliceGeometryInput,
   process: FdmProcess,
   backendKind: SliceBackendKind,
   options?: SliceSubmitOptions,
@@ -138,6 +154,11 @@ export async function submitSliceJob(
   // Guard against DataCloneError when job/process accidentally carry non-cloneable fields.
   const safeJob = sanitizeJobForWorker(job)
   const safeProcess = clonePlain(process)
+  const modelMeshes = normalizeSliceModelMeshes(geometry, safeJob)
+  if (!modelMeshes.length) {
+    return Promise.reject(new Error('missing vertices for slicing'))
+  }
+  const transferables = modelMeshes.map((m) => m.vertices.buffer)
 
   return new Promise<SliceResult>((resolve, reject) => {
     worker.onmessage = (ev: MessageEvent) => {
@@ -164,6 +185,9 @@ export async function submitSliceJob(
       reject(new Error('slice worker message error'))
     }
 
-    worker.postMessage({ job: safeJob, vertices, process: safeProcess, backendKind }, [vertices.buffer])
+    worker.postMessage(
+      { job: safeJob, modelMeshes, process: safeProcess, backendKind },
+      transferables,
+    )
   })
 }

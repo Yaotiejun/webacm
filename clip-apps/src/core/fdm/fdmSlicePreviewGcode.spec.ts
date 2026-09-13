@@ -38,6 +38,8 @@ describe('fdmSlicePreviewGcode', () => {
     const g = buildFdmSlicePreviewSyntheticGcode(makeSlice(), { maxLayers: 4, maxPoints: 100 })
     expect(g).toContain('G21')
     expect(g).toContain('G0 Z0.2000')
+    // Separate G0 for perimeter vs infill paths (no stitched travel).
+    expect(g.split('\n').filter((l) => l.startsWith('G0 ')).length).toBeGreaterThanOrEqual(3)
     const built = buildGcodePathPositions(g)
     expect(built.vertexCount).toBeGreaterThanOrEqual(2)
   })

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { evaluateMigrationOrderedPipeline } from './migrationOrderedPipeline'
 
 describe('migrationOrderedPipeline', () => {
-  it('runs offline ordered phases 1-4', async () => {
+  it('runs offline ordered phases 1-6', async () => {
     const prevCam = process.env.CAM_LIVE_MIGRATION
     const prevDev = process.env.DEVICE_PRODUCTION_SOAK
     delete process.env.CAM_LIVE_MIGRATION
@@ -17,6 +17,8 @@ describe('migrationOrderedPipeline', () => {
       'device-soak',
       'fdm-legacy',
       'raster-e2e',
+      'laser-soak',
+      'sla-soak',
     ])
     const failed = r.phases.filter((p) => !p.ok)
     expect(failed, failed.flatMap((p) => `${p.id}: ${p.errors.join('; ')}`).join(' | ')).toEqual([])

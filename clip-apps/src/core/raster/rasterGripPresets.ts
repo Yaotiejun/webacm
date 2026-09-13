@@ -30,6 +30,7 @@ export const GRIP_RASTER_RADIAL_BASELINE: Readonly<RasterConfig> = {
   yStep: 5,
   zFloor: 0,
   tracingStep: 1,
+  radialV3: false,
 }
 
 export function rasterConfigWithGripPreset(

@@ -3,7 +3,7 @@ module,id,type,feature,route,manual_steps,expected,automation,priority,status,te
 自动化分层,L1,automation_layer,迁移门全量,,在 clip-apps 目录执行,Vitest 全通过（约 1141+）,npm run test:migration,P0,,,,
 自动化分层,L2,automation_layer,产品门,,在 clip-apps 目录执行,gates allOk,npm run migration:gates,P0,,,,
 自动化分层,L3,automation_layer,离线 soak,,在 clip-apps 目录执行,各 MigrationComplete 通过,npm run soak:offline,P1,,,,
-自动化分层,L4,automation_layer,有序管线离线,,在 clip-apps 目录执行,四阶段离线 OK,npm run migration:ordered:offline,P1,,,,
+自动化分层,L4,automation_layer,有序管线离线,,在 clip-apps 目录执行,六阶段离线 OK（含 laser/sla soak）,npm run migration:ordered:offline,P1,,,,
 自动化分层,L5,automation_layer,Bridge mock WS,,在 clip-apps 目录执行,carveraOk 且 gridbotOk,npm run soak:device-bridge:mock,P0,,,,
 自动化分层,L6,automation_layer,Live soak 组合,,按 OPERATIONS.md §9 设置 env,各域 live spec 通过,见 OPERATIONS.md §7 各模块 automation 列,P2,,,,
 自动化分层,L7,automation_layer,Raster E2E 基线,,E2E_RASTER_BASELINE=1,planar checksum 一致,npm run test:e2e:raster-baseline,P1,,,,

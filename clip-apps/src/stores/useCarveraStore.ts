@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { DEFAULT_CARVERA_BRIDGE_ENDPOINT } from '@/core/migration/deviceBridgeDefaultEndpoint'
-import { connectCarvera, disconnectCarvera, isCarveraConnected, sendCarveraLine, subscribeCarveraLines } from '@/api/device'
+import { connectCarvera, disconnectCarvera, isCarveraConnected, listCarveraSd, playCarveraSd, removeCarveraSd, sendCarveraLine, subscribeCarveraControl, subscribeCarveraLines, uploadCarveraSdAndMaybePlay } from '@/api/device'
 import {
   listCarveraJobs,
   saveCarveraJob,
@@ -10,6 +10,10 @@ import {
 import { clonePlain } from '@/core/clonePlain'
 import { waitUnlessSendCanceled } from '@/core/devices/deviceJobSendLoop'
 import {
+  CarveraAckSendQueue,
+  isCarveraOkLine,
+} from '@/core/devices/carveraAckSendQueue'
+import {
   parseGrblAlarmLine,
   parseGrblAxisLine,
   parseGrblSpindleLine,
@@ -17,6 +21,30 @@ import {
 } from '@/core/devices/grblLineParse'
 import { parseDeviceBridgeTcpEndpoint } from '@/core/migration/deviceBridgeBackendModes'
 import { classifyGrblIncomingLogLine } from '@/core/devices/grblLogClassify'
+import { carveraSdPathFromJobName } from '@/core/devices/carveraSdPath'
+import {
+  isCarveraSdDirName,
+  joinCarveraSdPath,
+  parentCarveraSdPath,
+  type CarveraSdEntry,
+} from '@/core/devices/carveraSdBrowser'
+
+let jobSendQueue: CarveraAckSendQueue | null = null
+let jobSendWakeOk: (() => void) | null = null
+
+function wakeJobSendOk() {
+  const w = jobSendWakeOk
+  jobSendWakeOk = null
+  w?.()
+}
+
+function emitCarveraJobLine(store: { sendSeq: number; pendingSeq: number | null; appendLog: (d: 'out', t: string, seq?: number) => void; sendSentLines: number }, line: string) {
+  sendCarveraLine(line)
+  const seq = (store.sendSeq += 1)
+  store.pendingSeq = seq
+  store.appendLog('out', line, seq)
+  store.sendSentLines += 1
+}
 
 export interface CarveraMachineState {
   x: number
@@ -43,6 +71,7 @@ export interface CarveraMachineState {
   setupState?: number
   haltCode?: number
   plannerBuf?: number
+  alarmCode?: number
   spindleOn: boolean
   spindleRpm: number
   state: 'UNKNOWN' | 'IDLE' | 'RUN' | 'PAUSE' | 'ALARM' | 'HOLD' | 'DOOR'
@@ -81,6 +110,18 @@ export interface CarveraState {
   sendTotalLines: number
   sendSentLines: number
   bridge: CarveraBridgeState
+  /** SD XMODEM upload in progress */
+  sdUploading: boolean
+  sdUploadPath: string | null
+  sdUploadBlock: number
+  sdUploadTotal: number
+  sdLastMd5: string | null
+  /** Machine SD browser */
+  sdListing: boolean
+  sdPath: string
+  sdDir: string[]
+  sdList: CarveraSdEntry[]
+  sdSelectedPath: string | null
 }
 
 const LS_KEY = 'ws-carvera'
@@ -145,6 +186,16 @@ export const useCarveraStore = defineStore('carvera', {
       lastMessage: null,
       updatedAt: null,
     },
+    sdUploading: false,
+    sdUploadPath: null,
+    sdUploadBlock: 0,
+    sdUploadTotal: 0,
+    sdLastMd5: null,
+    sdListing: false,
+    sdPath: '/sd/gcodes',
+    sdDir: ['sd', 'gcodes'],
+    sdList: [],
+    sdSelectedPath: null,
   }),
   getters: {
     currentJobName(state): string {
@@ -259,7 +310,10 @@ export const useCarveraStore = defineStore('carvera', {
             feedOverridePct: status.feed.overridePct,
           })
         }
-        if (status?.buf != null) this.updateMachine({ plannerBuf: status.buf })
+        if (status?.buf != null) {
+          this.updateMachine({ plannerBuf: status.buf })
+          if (jobSendQueue && !jobSendQueue.isFinished()) wakeJobSendOk()
+        }
         if (status?.laser) {
           this.updateMachine({
             laserCurrent: status.laser.current,
@@ -309,12 +363,26 @@ export const useCarveraStore = defineStore('carvera', {
         this.appendLog('info', `无法发送指令（连接未就绪）：${line}`)
         return
       }
+      const trimmed = line.trim()
+      // GRBL realtime: no `ok` response
+      if (trimmed === '!' || trimmed === '~' || trimmed === '?') {
+        try {
+          sendCarveraLine(trimmed)
+          this.appendLog(
+            'out',
+            trimmed === '!' ? '[feed-hold]' : trimmed === '~' ? '[cycle-start]' : '?',
+          )
+        } catch (e: any) {
+          this.appendLog('info', `发送指令失败：${e?.message ?? String(e)}`)
+        }
+        return
+      }
       try {
-        sendCarveraLine(line)
+        sendCarveraLine(trimmed)
         const seq = (this.sendSeq += 1)
         this.pendingSeq = seq
         writeLocal({ sendSeq: this.sendSeq })
-        this.appendLog('out', line, seq)
+        this.appendLog('out', trimmed, seq)
       } catch (e: any) {
         this.appendLog('info', `发送指令失败：${e?.message ?? String(e)}`)
       }
@@ -353,9 +421,10 @@ export const useCarveraStore = defineStore('carvera', {
         this.appendLog('info', `发送继续指令失败：${e?.message ?? String(e)}`)
       }
     },
-    jogRelative(axis: 'X' | 'Y' | 'Z', delta: number, feed?: number) {
-      const cmds: string[] = []
-      cmds.push('G91')
+    jogRelative(axis: 'X' | 'Y' | 'Z' | 'A', delta: number, feed?: number) {
+      // carve-control uses compact `G91G0X…`; we restore G90 for safety.
+      const unit = axis === 'A' ? '°' : 'mm'
+      const cmds: string[] = ['G91']
       if (feed && Number.isFinite(feed)) {
         cmds.push(`G1 ${axis}${delta} F${feed}`)
       } else {
@@ -365,7 +434,35 @@ export const useCarveraStore = defineStore('carvera', {
       for (const c of cmds) {
         this.basicCommandSend(c)
       }
-      this.appendLog('info', `[JOG] ${axis} ${delta}mm${feed && Number.isFinite(feed) ? ` F${feed}` : ''}`)
+      this.appendLog(
+        'info',
+        `[JOG] ${axis} ${delta}${unit}${feed && Number.isFinite(feed) ? ` F${feed}` : ''}`,
+      )
+    },
+    /** carve-control WCS zero / origin / clear helpers */
+    setWcsZero(axis: 'X' | 'Y' | 'Z' | 'A') {
+      if (axis === 'A') {
+        this.basicCommandSend('G92.4A0')
+      } else {
+        this.basicCommandSend(`G10L20P0${axis}0`)
+      }
+    },
+    setOriginFromMpos() {
+      const { x, y } = this.machine
+      this.basicCommandSend(`G10 L2 P0 X${x} Y${y}`)
+      this.appendLog('info', `[origin] G10 L2 P0 X${x} Y${y}`)
+    },
+    setFeedOverridePct(pct: number) {
+      const v = Math.max(10, Math.min(200, Math.round(pct)))
+      this.basicCommandSend(`M220 S${v}`)
+    },
+    setSpinOverridePct(pct: number) {
+      const v = Math.max(10, Math.min(200, Math.round(pct)))
+      this.basicCommandSend(`M223 S${v}`)
+    },
+    setLaserOverridePct(pct: number) {
+      const v = Math.max(0, Math.min(200, Math.round(pct)))
+      this.basicCommandSend(`M325 S${v}`)
     },
     async sendJobLines(content: string, delayMs = 20) {
       if (this.sending) {
@@ -381,7 +478,6 @@ export const useCarveraStore = defineStore('carvera', {
       this.sendPaused = false
       this.sendCanceled = false
       this.sendSentLines = 0
-      this.appendLog('info', `开始逐行发送作业（延迟 ${delayMs}ms）`)
 
       const lines = content
         .split(/\r?\n/)
@@ -390,36 +486,78 @@ export const useCarveraStore = defineStore('carvera', {
 
       this.sendTotalLines = lines.length
 
+      const queue = new CarveraAckSendQueue({ minPlannerBuf: 1, maxInFlight: 1 })
+      jobSendQueue = queue
+      queue.enqueue(lines)
+
+      const send = (line: string) => {
+        emitCarveraJobLine(this, line)
+        writeLocal({ sendSeq: this.sendSeq })
+      }
+
+      const waitOk = (timeoutMs: number) =>
+        new Promise<boolean>((resolve) => {
+          const t = setTimeout(() => {
+            if (jobSendWakeOk) jobSendWakeOk = null
+            resolve(false)
+          }, timeoutMs)
+          jobSendWakeOk = () => {
+            clearTimeout(t)
+            resolve(true)
+          }
+        })
+
+      this.appendLog(
+        'info',
+        `开始 ack 发送（等 ok${delayMs > 0 ? `，${delayMs}ms` : ''}；Buf 门控）`,
+      )
+
       try {
-        for (const line of lines) {
+        queue.pump(send, this.machine.plannerBuf)
+        await new Promise<void>((r) => queueMicrotask(r))
+
+        while (!queue.isFinished() && !this.sendCanceled) {
           if (!(await waitUnlessSendCanceled(() => this.sendCanceled, () => this.sendPaused))) {
             this.appendLog('info', '用户已取消发送，停止作业发送')
             break
           }
-
           if (!this.isSocketOpen()) {
             this.appendLog('info', '连接中断，停止发送')
             break
           }
+          if (queue.isFinished()) break
 
-          sendCarveraLine(line)
-          const seq = (this.sendSeq += 1)
-          this.pendingSeq = seq
-          writeLocal({ sendSeq: this.sendSeq })
-          this.appendLog('out', line, seq)
-          this.sendSentLines += 1
+          if (queue.unackedCount > 0 || queue.needsFlowWait(this.machine.plannerBuf)) {
+            const gotOk = await waitOk(60_000)
+            if (!gotOk) {
+              this.appendLog('info', '等待固件 ok / 缓冲释放超时，停止发送')
+              break
+            }
+          }
 
-          if (delayMs > 0) {
+          const n = queue.pump(send, this.machine.plannerBuf)
+          if (n > 0 && delayMs > 0) {
             await new Promise((r) => setTimeout(r, delayMs))
+          } else if (n === 0 && queue.pendingCount > 0 && !this.sendCanceled) {
+            // Buf held with nothing in flight — poll status then wait again
+            try {
+              sendCarveraLine('?')
+            } catch {
+              // ignore
+            }
+            await waitOk(2_000)
           }
         }
 
-        if (!this.sendCanceled) {
+        if (!this.sendCanceled && queue.isFinished()) {
           this.appendLog('info', '作业发送完成')
         }
       } catch (e: any) {
         this.appendLog('info', `发送过程中出错：${e?.message ?? String(e)}`)
       } finally {
+        jobSendQueue?.dispose()
+        jobSendQueue = null
+        jobSendWakeOk = null
         this.sending = false
         this.sendPaused = false
       }
@@ -434,6 +572,101 @@ export const useCarveraStore = defineStore('carvera', {
       if (this.sending) {
         this.sendCanceled = true
         this.sendPaused = false
+      }
+    },
+    async uploadAndPlayJob(content: string, jobName: string, play = true) {
+      if (this.sending || this.sdUploading) {
+        this.appendLog('info', '已有发送/上传任务在进行中')
+        return
+      }
+      if (!this.isSocketOpen()) {
+        this.appendLog('info', 'Socket 未就绪，无法 SD 上传')
+        return
+      }
+      const path = carveraSdPathFromJobName(jobName)
+      this.sdUploading = true
+      this.sdUploadPath = path
+      this.sdUploadBlock = 0
+      this.sdUploadTotal = 0
+      this.appendLog('info', `SD ${play ? 'upload+play' : 'upload'}: ${path}`)
+      try {
+        const result = await uploadCarveraSdAndMaybePlay({ path, content, play })
+        this.sdLastMd5 = result.md5 ?? null
+        this.appendLog('info', `SD 完成：${result.path}${result.md5 ? ` md5=${result.md5}` : ''}`)
+        void this.refreshSdList(this.sdPath)
+      } catch (e: any) {
+        this.appendLog('info', `SD 失败：${e?.message ?? String(e)}`)
+        throw e
+      } finally {
+        this.sdUploading = false
+      }
+    },
+    async refreshSdList(path?: string) {
+      if (!this.isSocketOpen()) {
+        this.appendLog('info', 'Socket 未就绪，无法列出 SD')
+        return
+      }
+      if (this.sdUploading || this.sdListing) {
+        this.appendLog('info', 'SD 忙，稍后再列目录')
+        return
+      }
+      const target = path ?? this.sdPath
+      this.sdListing = true
+      try {
+        const result = await listCarveraSd({ path: target })
+        this.sdPath = result.path
+        this.sdDir = result.dir
+        this.sdList = result.list
+        this.appendLog('info', `SD 列表 ${result.path}（${result.list.length}）`)
+      } catch (e: any) {
+        this.appendLog('info', `SD 列表失败：${e?.message ?? String(e)}`)
+        throw e
+      } finally {
+        this.sdListing = false
+      }
+    },
+    async openSdEntry(entry: CarveraSdEntry) {
+      if (isCarveraSdDirName(entry.name)) {
+        const next = joinCarveraSdPath(this.sdPath, entry.name)
+        this.sdSelectedPath = null
+        await this.refreshSdList(next)
+        return
+      }
+      this.sdSelectedPath = joinCarveraSdPath(this.sdPath, entry.name)
+    },
+    async goSdParent() {
+      const parent = parentCarveraSdPath(this.sdPath)
+      this.sdSelectedPath = null
+      await this.refreshSdList(parent)
+    },
+    async playSelectedSd() {
+      const path = this.sdSelectedPath
+      if (!path) {
+        this.appendLog('info', '未选择 SD 文件')
+        return
+      }
+      try {
+        const result = await playCarveraSd({ path })
+        this.appendLog('info', `SD 播放：${result.path}`)
+      } catch (e: any) {
+        this.appendLog('info', `SD 播放失败：${e?.message ?? String(e)}`)
+        throw e
+      }
+    },
+    async removeSelectedSd() {
+      const path = this.sdSelectedPath
+      if (!path) {
+        this.appendLog('info', '未选择 SD 文件')
+        return
+      }
+      try {
+        const result = await removeCarveraSd({ path })
+        this.appendLog('info', `SD 已删除：${result.path}`)
+        this.sdSelectedPath = null
+        await this.refreshSdList(this.sdPath)
+      } catch (e: any) {
+        this.appendLog('info', `SD 删除失败：${e?.message ?? String(e)}`)
+        throw e
       }
     },
     async loadJobs() {
@@ -534,6 +767,32 @@ export const useCarveraStore = defineStore('carvera', {
 
         await connectCarvera(url)
 
+        subscribeCarveraControl((ev) => {
+          if (ev.type === 'xmodem') {
+            this.sdUploading = ev.phase === 'start' || ev.phase === 'progress'
+            this.sdUploadBlock = ev.block ?? this.sdUploadBlock
+            this.sdUploadTotal = ev.total ?? this.sdUploadTotal
+            if (ev.path) this.sdUploadPath = ev.path
+            if (ev.phase === 'error') {
+              this.appendLog('info', `XMODEM error: ${ev.message ?? 'unknown'}`)
+            }
+            return
+          }
+          if (ev.type === 'uploaded') {
+            this.sdLastMd5 = ev.md5
+            this.sdUploadPath = ev.path
+            this.appendLog('info', `uploaded ${ev.path} md5=${ev.md5}`)
+            return
+          }
+          if (ev.type === 'played') {
+            this.appendLog('info', `play ${ev.path}`)
+            return
+          }
+          if (ev.type === 'error') {
+            this.appendLog('info', `bridge: ${ev.message}`)
+          }
+        })
+
         // 订阅行流
         subscribeCarveraLines((rawLine) => {
           const lines = rawLine.split(/\r?\n/)
@@ -560,9 +819,16 @@ export const useCarveraStore = defineStore('carvera', {
               continue
             }
 
-            if (trimmed.toLowerCase() === 'ok' && this.pendingSeq !== null) {
-              this.appendLog('in', trimmed, this.pendingSeq)
-              this.pendingSeq = null
+            if (isCarveraOkLine(trimmed)) {
+              if (jobSendQueue?.handleOk()) {
+                wakeJobSendOk()
+              }
+              if (this.pendingSeq !== null) {
+                this.appendLog('in', trimmed, this.pendingSeq)
+                this.pendingSeq = null
+              } else {
+                this.appendLog('in', trimmed)
+              }
             } else {
               this.appendLog('in', trimmed)
             }

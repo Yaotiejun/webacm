@@ -3,3 +3,4 @@ import './kiriLegacyPolyfills'
 
 export { newPoint } from './legacy/geo/point.js'
 export { slice as geoSlice, sliceZ } from './legacy/geo/slicer.js'
+export { polygons as POLY } from './legacy/geo/polygons.js'

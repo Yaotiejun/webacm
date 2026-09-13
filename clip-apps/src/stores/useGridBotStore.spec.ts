@@ -141,4 +141,43 @@ describe('stores.useGridBotStore job list clone isolation', () => {
     expect(store.sendPaused).toBe(false)
     await vi.waitFor(() => expect(store.sending).toBe(false), { timeout: 5000 })
   })
+
+  it('pauseSend emits park script and cancelSend emits safety script', async () => {
+    const store = useGridBotStore()
+    await store.connect()
+    deviceMocks.autoOk = false
+    const p = store.sendJobLines('G0 X0\nG0 Y1\nG0 Y2\n', 0)
+    expect(store.sending).toBe(true)
+    sendGridBotLineMock.mockClear()
+    store.pauseSend()
+    expect(store.sendPaused).toBe(true)
+    expect(sendGridBotLineMock.mock.calls.map((c) => c[0])).toEqual(
+      expect.arrayContaining(['G91', 'G0 Z10 F600', 'G90']),
+    )
+    sendGridBotLineMock.mockClear()
+    store.cancelSend()
+    expect(store.sendCanceled).toBe(true)
+    expect(sendGridBotLineMock.mock.calls.map((c) => c[0])).toEqual(
+      expect.arrayContaining(['M104 S0', 'M140 S0', 'M107', 'M84']),
+    )
+    deviceMocks.autoOk = true
+    deviceMocks.lineHandler?.('ok')
+    deviceMocks.lineHandler?.('ok')
+    deviceMocks.lineHandler?.('ok')
+    await p
+  })
+
+  it('setNozzleTemp / jogRelative / estop send expected commands', async () => {
+    const store = useGridBotStore()
+    await store.connect()
+    sendGridBotLineMock.mockClear()
+    store.setNozzleTemp(215)
+    expect(sendGridBotLineMock).toHaveBeenCalledWith('M104 S215')
+    sendGridBotLineMock.mockClear()
+    store.jogRelative('X', 1.5, 900)
+    expect(sendGridBotLineMock.mock.calls.map((c) => c[0])).toEqual(['G91', 'G0 X1.5 F900', 'G90'])
+    sendGridBotLineMock.mockClear()
+    store.estop()
+    expect(sendGridBotLineMock).toHaveBeenCalledWith('M112')
+  })
 })

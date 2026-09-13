@@ -21,6 +21,17 @@ export type GrblProbeState = {
   voltage?: number
 }
 
+/** carve-control `T:` — tool number + TLO offset */
+export type GrblToolState = {
+  number?: number
+  offset?: number
+}
+
+/** firmware leveling deviation `O:` (when present after auto-level) */
+export type GrblLevelState = {
+  deviation?: number
+}
+
 /** carve-control `S:` — spindle current, target, scale, ? */
 export type GrblSpinState = {
   current?: number
@@ -52,6 +63,8 @@ export type GrblStatusReport = {
   feed?: GrblFeedState
   laser?: GrblLaserState
   probe?: GrblProbeState
+  tool?: GrblToolState
+  level?: GrblLevelState
   spin?: GrblSpinState
   play?: GrblPlayState
   setup?: GrblSetupState
@@ -148,6 +161,15 @@ export function parseGrblStatusReport(line: string): GrblStatusReport | null {
 
   const probe = trimmed.match(/\|W:([-\d.]+)(?=\||>)/i)
   if (probe) out.probe = { voltage: Number(probe[1]) }
+
+  const tool = trimmed.match(/\|T:(-?\d+)(?:,([-\d.]+))?/i)
+  if (tool) {
+    out.tool = { number: Number(tool[1]) }
+    if (tool[2] != null) out.tool.offset = Number(tool[2])
+  }
+
+  const level = trimmed.match(/\|O:([-\d.]+)(?=\||>)/i)
+  if (level) out.level = { deviation: Number(level[1]) }
 
   const spin = trimmed.match(/\|S:([\d.]+),([\d.]+)(?:,([\d.]+)(?:,([\d.]+))?)?/i)
   if (spin) {

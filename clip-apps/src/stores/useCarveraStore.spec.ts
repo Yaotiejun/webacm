@@ -15,15 +15,86 @@ vi.mock('@/api/jobs', () => ({
 
 const deviceMocks = vi.hoisted(() => ({
   isConnected: false,
-  sendCarveraLine: vi.fn(),
+  lineHandler: null as null | ((line: string) => void),
+  controlHandler: null as null | ((ev: Record<string, unknown>) => void),
+  autoOk: true,
 }))
 
+const sendCarveraLineMock = vi.hoisted(() =>
+  vi.fn((line: string) => {
+    if (deviceMocks.autoOk && line !== '?') {
+      queueMicrotask(() => deviceMocks.lineHandler?.('ok'))
+    }
+  }),
+)
+
+const uploadCarveraSdAndMaybePlayMock = vi.hoisted(() =>
+  vi.fn(async (opts: { path: string; content: string; play?: boolean }) => {
+    queueMicrotask(() => {
+      deviceMocks.controlHandler?.({
+        type: 'xmodem',
+        phase: 'start',
+        path: opts.path,
+        block: 0,
+        total: 1,
+      })
+      deviceMocks.controlHandler?.({
+        type: 'xmodem',
+        phase: 'progress',
+        path: opts.path,
+        block: 1,
+        total: 1,
+      })
+      deviceMocks.controlHandler?.({ type: 'uploaded', path: opts.path, md5: 'abc' })
+      if (opts.play) {
+        deviceMocks.controlHandler?.({ type: 'played', path: opts.path })
+      }
+      deviceMocks.controlHandler?.({
+        type: 'xmodem',
+        phase: 'end',
+        path: opts.path,
+        block: 1,
+        total: 1,
+      })
+    })
+    return { path: opts.path, md5: 'abc' }
+  }),
+)
+
 vi.mock('@/api/device', () => ({
-  connectCarvera: vi.fn(),
-  disconnectCarvera: vi.fn(),
+  connectCarvera: vi.fn(async () => {
+    deviceMocks.isConnected = true
+  }),
+  disconnectCarvera: vi.fn(() => {
+    deviceMocks.isConnected = false
+    deviceMocks.lineHandler = null
+    deviceMocks.controlHandler = null
+  }),
   isCarveraConnected: vi.fn(() => deviceMocks.isConnected),
-  sendCarveraLine: (...args: unknown[]) => deviceMocks.sendCarveraLine(...args),
-  subscribeCarveraLines: vi.fn(),
+  sendCarveraLine: sendCarveraLineMock,
+  subscribeCarveraLines: (handler: (line: string) => void) => {
+    deviceMocks.lineHandler = handler
+    return () => {
+      deviceMocks.lineHandler = null
+    }
+  },
+  subscribeCarveraControl: (handler: (ev: Record<string, unknown>) => void) => {
+    deviceMocks.controlHandler = handler
+    return () => {
+      deviceMocks.controlHandler = null
+    }
+  },
+  uploadCarveraSdAndMaybePlay: (...args: unknown[]) =>
+    uploadCarveraSdAndMaybePlayMock(...(args as [any])),
+  listCarveraSd: vi.fn(async () => ({
+    path: '/sd/gcodes',
+    dir: ['sd', 'gcodes'],
+    list: [],
+  })),
+  removeCarveraSd: vi.fn(async (opts: { path: string }) => ({ path: opts.path })),
+  playCarveraSd: vi.fn(async (opts: { path: string }) => ({ path: opts.path })),
+  sendCarveraBinary: vi.fn(),
+  sendCarveraControl: vi.fn(),
 }))
 
 import { useCarveraStore } from './useCarveraStore'
@@ -34,6 +105,11 @@ describe('stores.useCarveraStore job list clone isolation', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     deviceMocks.isConnected = false
+    deviceMocks.lineHandler = null
+    deviceMocks.controlHandler = null
+    deviceMocks.autoOk = true
+    sendCarveraLineMock.mockClear()
+    uploadCarveraSdAndMaybePlayMock.mockClear()
   })
 
   it('loadJobs stores a clone so mutating API-returned array does not change store', async () => {
@@ -66,17 +142,56 @@ describe('stores.useCarveraStore job list clone isolation', () => {
     expect(saved.name).toBe('C')
   })
 
-  it('sendJobLines posts lines when socket open', async () => {
-    deviceMocks.isConnected = true
+  it('sendJobLines ack-gates lines when socket open', async () => {
     const store = useCarveraStore()
+    await store.connect()
+    expect(store.connected).toBe(true)
     await store.sendJobLines('G28\nG1 X1\n', 0)
-    expect(deviceMocks.sendCarveraLine).toHaveBeenCalledTimes(2)
+    expect(sendCarveraLineMock).toHaveBeenCalledTimes(2)
+    expect(sendCarveraLineMock).toHaveBeenNthCalledWith(1, 'G28')
+    expect(sendCarveraLineMock).toHaveBeenNthCalledWith(2, 'G1 X1')
     expect(store.sendSentLines).toBe(2)
+    expect(store.sending).toBe(false)
+  })
+
+  it('jogRelative supports A axis', async () => {
+    const store = useCarveraStore()
+    await store.connect()
+    store.jogRelative('A', 90)
+    expect(sendCarveraLineMock).toHaveBeenCalledWith('G91')
+    expect(sendCarveraLineMock).toHaveBeenCalledWith('G0 A90')
+    expect(sendCarveraLineMock).toHaveBeenCalledWith('G90')
+  })
+
+  it('setWcsZero sends carve-control zero macros', async () => {
+    const store = useCarveraStore()
+    await store.connect()
+    store.setWcsZero('X')
+    expect(sendCarveraLineMock).toHaveBeenCalledWith('G10L20P0X0')
+    store.setWcsZero('A')
+    expect(sendCarveraLineMock).toHaveBeenCalledWith('G92.4A0')
+  })
+
+  it('uploadAndPlayJob calls bridge SD upload+play', async () => {
+    const store = useCarveraStore()
+    await store.connect()
+    await store.uploadAndPlayJob('G0 X0\nG1 X1\n', 'demo.nc', true)
+    expect(uploadCarveraSdAndMaybePlayMock).toHaveBeenCalled()
+    const arg = uploadCarveraSdAndMaybePlayMock.mock.calls[0]?.[0] as {
+      path: string
+      content: string
+      play: boolean
+    }
+    expect(arg.path).toMatch(/^\/sd\/gcodes\//)
+    expect(arg.content).toContain('G1 X1')
+    expect(arg.play).toBe(true)
+    expect(store.sdLastMd5).toBe('abc')
+    expect(store.sdUploading).toBe(false)
   })
 
   it('pauseSend holds sendPaused while sending', async () => {
-    deviceMocks.isConnected = true
     const store = useCarveraStore()
+    await store.connect()
     void store.sendJobLines('G28\nG1 X1\nG1 X2\n', 40)
     await vi.waitFor(() => expect(store.sending).toBe(true))
     store.pauseSend()

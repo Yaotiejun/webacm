@@ -2,9 +2,11 @@ import { evaluateCamLiveExportMigration } from '@/core/cam/camLiveExportMigratio
 import { evaluateDeviceProductionSoakMigration } from '@/core/devices/deviceProductionSoakMigration'
 import { evaluateFdmLegacyMigrationComplete } from '@/core/slicer/fdmLegacyMigrationComplete'
 import { evaluateRasterE2eMigrationComplete } from '@/core/raster/rasterE2eMigrationComplete'
+import { evaluateLaserSoakMigrationComplete } from '@/core/laser/laserSoakMigrationComplete'
+import { evaluateSlaSoakMigrationComplete } from '@/core/sla/slaSoakMigrationComplete'
 
 export interface MigrationOrderedPhaseResult {
-  id: 'cam-live' | 'device-soak' | 'fdm-legacy' | 'raster-e2e'
+  id: 'cam-live' | 'device-soak' | 'fdm-legacy' | 'raster-e2e' | 'laser-soak' | 'sla-soak'
   ok: boolean
   detail: string
   errors: string[]
@@ -15,7 +17,7 @@ export interface MigrationOrderedPipelineReport {
   allOk: boolean
 }
 
-/** Runs migration phases 1→4 (offline checks; live steps need env + npm scripts). */
+/** Runs migration phases 1→6 (offline checks; live steps need env + npm scripts). */
 export async function evaluateMigrationOrderedPipeline(): Promise<MigrationOrderedPipelineReport> {
   const cam = await evaluateCamLiveExportMigration()
   const devices = await evaluateDeviceProductionSoakMigration()
@@ -26,6 +28,8 @@ export async function evaluateMigrationOrderedPipeline(): Promise<MigrationOrder
     raster.errors.every(
       (e) => e.includes('sync:grip-fixtures') || e.includes('grip-raster-fixtures'),
     )
+  const laser = evaluateLaserSoakMigrationComplete()
+  const sla = await evaluateSlaSoakMigrationComplete()
 
   const phases: MigrationOrderedPhaseResult[] = [
     {
@@ -51,6 +55,18 @@ export async function evaluateMigrationOrderedPipeline(): Promise<MigrationOrder
       ok: rasterOk,
       detail: raster.ok ? raster.e2eHint : `${raster.e2eHint} (fixtures optional offline)`,
       errors: rasterOk ? [] : raster.errors,
+    },
+    {
+      id: 'laser-soak',
+      ok: laser.ok,
+      detail: laser.soakHint,
+      errors: laser.errors,
+    },
+    {
+      id: 'sla-soak',
+      ok: sla.ok,
+      detail: sla.soakHint,
+      errors: sla.errors,
     },
   ]
 

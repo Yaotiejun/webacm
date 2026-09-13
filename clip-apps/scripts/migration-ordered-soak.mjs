@@ -80,4 +80,10 @@ if (process.env.E2E_RASTER_BASELINE === '1') {
   skip('raster E2E', 'set E2E_RASTER_BASELINE=1 (sync fixtures first)')
 }
 
+console.log('\n=== Phase 5: Laser golden soak (offline) ===')
+run('npm', ['run', 'soak:laser'])
+
+console.log('\n=== Phase 6: SLA golden soak (offline) ===')
+run('npm', ['run', 'soak:sla'])
+
 console.log('\n=== migration ordered soak complete ===')

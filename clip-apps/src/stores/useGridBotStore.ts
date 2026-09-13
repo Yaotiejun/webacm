@@ -25,6 +25,13 @@ import {
 } from '@/core/devices/gridbotPrintElapsed'
 import { isGridbotPrintRunActive } from '@/core/devices/gridbotPrintRun'
 import { parseDeviceBridgeTcpEndpoint } from '@/core/migration/deviceBridgeBackendModes'
+import {
+  filterNonEmptyGcodeLines,
+  GRIDBOT_CANCEL_SAFETY_SCRIPT,
+  GRIDBOT_ESTOP_SCRIPT,
+  GRIDBOT_PAUSE_PARK_SCRIPT,
+  GRIDBOT_RESUME_UNPARK_SCRIPT,
+} from '@/core/devices/gridbotSafetyScripts'
 
 let jobSendQueue: GridbotAckSendQueue | null = null
 let jobSendWakeOk: (() => void) | null = null
@@ -392,6 +399,53 @@ export const useGridBotStore = defineStore('gridbot', {
         this.appendLog('info', `发送指令失败：${e?.message ?? String(e)}`)
       }
     },
+    /** Fire-and-forget script (park / safety); does not use job ack queue. */
+    sendScriptLines(lines: readonly string[]) {
+      for (const line of filterNonEmptyGcodeLines(lines)) {
+        this.basicCommandSend(line)
+      }
+    },
+    setNozzleTemp(celsius: number) {
+      const s = Math.max(0, Math.round(Number(celsius) || 0))
+      this.basicCommandSend(`M104 S${s}`)
+      this.basicCommandSend('M105')
+    },
+    setBedTemp(celsius: number) {
+      const s = Math.max(0, Math.round(Number(celsius) || 0))
+      this.basicCommandSend(`M140 S${s}`)
+      this.basicCommandSend('M105')
+    },
+    preheat(nozzle = 200, bed = 60) {
+      this.setNozzleTemp(nozzle)
+      this.setBedTemp(bed)
+      this.appendLog('info', `预热 T${nozzle} / B${bed}`)
+    },
+    cooldown() {
+      this.setNozzleTemp(0)
+      this.setBedTemp(0)
+      this.basicCommandSend('M107')
+      this.appendLog('info', '冷却：加热关闭')
+    },
+    setFeedOverridePct(pct: number) {
+      const s = Math.max(10, Math.min(200, Math.round(Number(pct) || 100)))
+      this.basicCommandSend(`M220 S${s}`)
+    },
+    jogRelative(axis: 'X' | 'Y' | 'Z' | 'E', delta: number, feed?: number) {
+      if (!Number.isFinite(delta) || delta === 0) return
+      const f = Number.isFinite(feed) && (feed as number) > 0 ? Math.round(feed as number) : 1200
+      const a = axis.toUpperCase()
+      this.sendScriptLines(['G91', `G0 ${a}${delta} F${f}`, 'G90'])
+    },
+    homeAxes(axes?: 'X' | 'Y' | 'Z' | 'XY' | 'XYZ') {
+      if (!axes || axes === 'XYZ') this.basicCommandSend('G28')
+      else this.basicCommandSend(`G28 ${axes.split('').join(' ')}`)
+    },
+    estop() {
+      this.sendCanceled = true
+      this.sendPaused = false
+      this.sendScriptLines(GRIDBOT_ESTOP_SCRIPT)
+      this.appendLog('info', 'E-stop：已发送急停脚本')
+    },
     async sendJobLines(content: string, delayMs = 20, useChecksum = false) {
       if (this.sending) {
         this.appendLog('info', '已有发送任务在进行中，忽略新的发送请求')
@@ -514,16 +568,23 @@ export const useGridBotStore = defineStore('gridbot', {
       }
     },
     pauseSend() {
-      if (this.sending) this.sendPaused = true
+      if (!this.sending || this.sendPaused) return
+      this.sendPaused = true
+      this.sendScriptLines(GRIDBOT_PAUSE_PARK_SCRIPT)
+      this.appendLog('info', '已暂停发送并抬升 Z（park）')
     },
     resumeSend() {
+      if (!this.sending || !this.sendPaused) return
+      this.sendScriptLines(GRIDBOT_RESUME_UNPARK_SCRIPT)
       this.sendPaused = false
+      this.appendLog('info', '已继续发送并回落 Z（unpark）')
     },
     cancelSend() {
-      if (this.sending) {
-        this.sendCanceled = true
-        this.sendPaused = false
-      }
+      if (!this.sending) return
+      this.sendCanceled = true
+      this.sendPaused = false
+      this.sendScriptLines(GRIDBOT_CANCEL_SAFETY_SCRIPT)
+      this.appendLog('info', '已请求停止并发送安全关断脚本')
     },
   },
 })
